@@ -1,0 +1,144 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "MCPAction",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "required": [
+      "action",
+      "selector"
+    ],
+    "properties": {
+      "action": {
+        "type": "string",
+        "enum": [
+          "click",
+          "fill",
+          "goto",
+          "google_search",
+          "waitUntil",
+          "assert",
+          "extract"
+        ]
+      },
+      "selector": {
+        "type": "string"
+      },
+      "value": {
+        "type": "string"
+      },
+      "condition": {
+        "type": "string"
+      },
+      "timeout": {
+        "type": "integer"
+      },
+      "extract": {
+        "type": "string",
+        "enum": [
+          "text",
+          "value",
+          "html",
+          "attribute"
+        ]
+      },
+      "attribute": {
+        "type": "string"
+      }
+    },
+    "additionalProperties": false
+  },
+  "message_types": {
+    "init": {
+      "type": "object",
+      "properties": {
+        "type": {"type": "string", "enum": ["init"]},
+        "message": {"type": "string", "description": "사용자 목표/명령"}
+      },
+      "required": ["type", "message"]
+    },
+    "dom": {
+      "type": "object",
+      "properties": {
+        "type": {"type": "string", "enum": ["dom"]},
+        "message": {"type": "string", "description": "사용자 목표/명령"},
+        "dom": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "tag": {"type": "string"},
+              "text": {"type": "string"},
+              "id": {"type": "string"},
+              "name": {"type": "string"},
+              "type": {"type": "string"},
+              "selector": {"type": "string"}
+            }
+          }
+        },
+        "lastAction": {"type": "object", "description": "이전 액션 정보"}
+      },
+      "required": ["type", "message", "dom"]
+    },
+    "dom_with_image": {
+      "type": "object",
+      "properties": {
+        "type": {"type": "string", "enum": ["dom_with_image"]},
+        "message": {"type": "string", "description": "사용자 목표/명령"},
+        "dom": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "tag": {"type": "string"},
+              "text": {"type": "string"},
+              "id": {"type": "string"},
+              "name": {"type": "string"},
+              "type": {"type": "string"},
+              "selector": {"type": "string"}
+            }
+          }
+        },
+        "image": {"type": "string", "description": "base64 인코딩된 화면 캡처 이미지"},
+        "lastAction": {"type": "object", "description": "이전 액션 정보"}
+      },
+      "required": ["type", "message", "dom", "image"]
+    },
+    "action": {
+      "type": "object",
+      "properties": {
+        "type": {"type": "string", "enum": ["action"]},
+        "step": {"type": "integer"},
+        "action": {
+          "type": "object",
+          "properties": {
+            "action": {"type": "string", "enum": ["click", "fill", "goto", "google_search", "hover", "waitUntil", "end"]},
+            "selector": {"type": "string", "description": "CSS 선택자"},
+            "text": {"type": "string", "description": "텍스트 매칭용"},
+            "value": {"type": "string", "description": "입력값"},
+            "query": {"type": "string", "description": "Google 검색어 (google_search 액션용)"},
+            "condition": {"type": "string", "description": "대기 조건"},
+            "timeout": {"type": "integer", "description": "타임아웃 (ms)"}
+          },
+          "required": ["action"]
+        }
+      },
+      "required": ["type", "step", "action"]
+    },
+    "end": {
+      "type": "object",
+      "properties": {
+        "type": {"type": "string", "enum": ["end"]}
+      },
+      "required": ["type"]
+    },
+    "error": {
+      "type": "object",
+      "properties": {
+        "type": {"type": "string", "enum": ["error"]},
+        "detail": {"type": "string", "description": "오류 상세 정보"}
+      },
+      "required": ["type", "detail"]
+    }
+  }
+}

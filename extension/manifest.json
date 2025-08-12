@@ -3,7 +3,7 @@
   "name": "Fourhand Chat",
   "version": "1.0",
   "description": "Chat with a local LLM server from a floating chat UI.",
-  "permissions": ["scripting"],
+  "permissions": ["scripting", "storage"],
   "host_permissions": ["<all_urls>"],
   "content_scripts": [
     {

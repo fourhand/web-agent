@@ -33,27 +33,28 @@ if (!window.mcpAgentInjected) {
       });
     }
     
-    restore() {
-      const saved = localStorage.getItem("mcp-context");
-      if (saved) {
-        try {
-          const data = JSON.parse(saved);
-          this.sessionId = data.sessionId || this.sessionId;
-          this.currentGoal = data.currentGoal || "";
-          this.currentPlan = data.currentPlan || [];
-          this.actionHistory = data.actionHistory || [];
-          this.conversationHistory = data.conversationHistory || [];
-          this.step = data.step || 0;
-          this.lastDomSnapshot = data.lastDomSnapshot || "";
-          this.createdAt = data.createdAt || Date.now();
+    async restore() {
+      try {
+        const result = await chrome.storage.local.get("mcp-context");
+        const saved = result["mcp-context"];
+        
+        if (saved) {
+          this.sessionId = saved.sessionId || this.sessionId;
+          this.currentGoal = saved.currentGoal || "";
+          this.currentPlan = saved.currentPlan || [];
+          this.actionHistory = saved.actionHistory || [];
+          this.conversationHistory = saved.conversationHistory || [];
+          this.step = saved.step || 0;
+          this.lastDomSnapshot = saved.lastDomSnapshot || "";
+          this.createdAt = saved.createdAt || Date.now();
           
           // 진행 상태 복원
-          this.status = data.status || "idle";
-          this.lastActionType = data.lastActionType || null;
-          this.expectedPageChange = data.expectedPageChange || false;
-          this.waitingForEvaluation = data.waitingForEvaluation || false;
+          this.status = saved.status || "idle";
+          this.lastActionType = saved.lastActionType || null;
+          this.expectedPageChange = saved.expectedPageChange || false;
+          this.waitingForEvaluation = saved.waitingForEvaluation || false;
           
-          console.log("🔄 컨텍스트 복원:", {
+          console.log("🔄 컨텍스트 복원 (Cross-Origin Safe):", {
             goal: this.currentGoal,
             step: this.step,
             actionsCount: this.actionHistory.length,
@@ -62,15 +63,33 @@ if (!window.mcpAgentInjected) {
             status: this.status,
             lastActionType: this.lastActionType,
             expectedPageChange: this.expectedPageChange,
-            waitingForEvaluation: this.waitingForEvaluation
+            waitingForEvaluation: this.waitingForEvaluation,
+            domain: window.location.origin
           });
-        } catch (e) {
-          console.error("❌ 컨텍스트 복원 실패:", e);
+        } else {
+          console.log("📝 새 컨텍스트 시작 (저장된 데이터 없음)");
+        }
+      } catch (e) {
+        console.error("❌ 컨텍스트 복원 실패:", e);
+        // Fallback to localStorage for backward compatibility
+        console.log("🔄 localStorage 폴백 시도...");
+        const saved = localStorage.getItem("mcp-context");
+        if (saved) {
+          try {
+            const data = JSON.parse(saved);
+            this.currentGoal = data.currentGoal || "";
+            this.currentPlan = data.currentPlan || [];
+            this.step = data.step || 0;
+            this.status = data.status || "idle";
+            console.log("✅ localStorage에서 복원 완료");
+          } catch (fallbackError) {
+            console.error("❌ localStorage 폴백도 실패:", fallbackError);
+          }
         }
       }
     }
     
-    save() {
+    async save() {
       const data = {
         sessionId: this.sessionId,
         currentGoal: this.currentGoal,
@@ -89,33 +108,41 @@ if (!window.mcpAgentInjected) {
         waitingForEvaluation: this.waitingForEvaluation
       };
       
-      localStorage.setItem("mcp-context", JSON.stringify(data));
-      
-      // 하위 호환성을 위해 기존 키들도 유지
-      localStorage.setItem("mcp-goal", this.currentGoal);
-      localStorage.setItem("mcp-actionHistory", JSON.stringify(this.actionHistory));
-      localStorage.setItem("mcp-currentPlan", JSON.stringify(this.currentPlan));
+      try {
+        // Chrome Extension Storage (Cross-Origin Safe)
+        await chrome.storage.local.set({"mcp-context": data});
+        console.log("💾 컨텍스트 저장 완료 (Cross-Origin Safe):", window.location.origin);
+        
+        // 하위 호환성을 위해 현재 도메인의 localStorage에도 저장
+        localStorage.setItem("mcp-context", JSON.stringify(data));
+        localStorage.setItem("mcp-goal", this.currentGoal);
+        localStorage.setItem("mcp-actionHistory", JSON.stringify(this.actionHistory));
+        localStorage.setItem("mcp-currentPlan", JSON.stringify(this.currentPlan));
+      } catch (e) {
+        console.error("❌ Chrome Storage 저장 실패, localStorage 사용:", e);
+        // Fallback to localStorage
+        localStorage.setItem("mcp-context", JSON.stringify(data));
+        localStorage.setItem("mcp-goal", this.currentGoal);
+        localStorage.setItem("mcp-actionHistory", JSON.stringify(this.actionHistory));
+        localStorage.setItem("mcp-currentPlan", JSON.stringify(this.currentPlan));
+      }
     }
     
     // 상태 관리 메서드들
-    setStatus(status, details = {}) {
+    async setStatus(status, details = {}) {
       console.log(`🔄 상태 변경: ${this.status} → ${status}`, details);
       this.status = status;
       this.lastActionType = details.actionType || this.lastActionType;
       this.expectedPageChange = details.expectedPageChange || false;
       this.waitingForEvaluation = details.waitingForEvaluation || false;
-      this.save();
+      await this.save();
     }
     
     shouldSendDomOnPageLoad() {
       console.log("🤔 페이지 로드 시 DOM 전송 여부 판단:");
-      console.log(`   - 상태: ${this.status}`);
       console.log(`   - 목표: ${this.currentGoal}`);
-      console.log(`   - 페이지 변경 예상: ${this.expectedPageChange}`);
-      console.log(`   - 평가 대기: ${this.waitingForEvaluation}`);
-      console.log(`   - 마지막 액션: ${this.lastActionType}`);
-      console.log(`   - 액션 히스토리: ${this.actionHistory.length}개`);
       console.log(`   - 계획: ${this.currentPlan.length}개`);
+      console.log(`   - 액션 히스토리: ${this.actionHistory.length}개`);
       
       // 목표가 없으면 전송하지 않음
       if (!this.currentGoal) {
@@ -129,27 +156,15 @@ if (!window.mcpAgentInjected) {
         return false;
       }
       
-      // goto 액션 후 페이지 변경이 예상되는 경우
-      if (this.expectedPageChange && this.lastActionType === "goto") {
-        console.log("✅ goto 액션 후 페이지 변경 - 평가 모드로 DOM 전송");
+      // 단순 로직: 목표 + 계획이 있으면 진행 중인 작업
+      if (this.currentGoal && this.currentPlan.length > 0) {
+        console.log("✅ 진행 중인 작업 발견 - 평가 모드로 DOM 전송");
         return "evaluation";
       }
       
-      // 평가 대기 중인 경우
-      if (this.waitingForEvaluation) {
-        console.log("✅ 평가 대기 중 - 평가 모드로 DOM 전송");
-        return "evaluation";
-      }
-      
-      // 실행 중이거나 계획이 있는 경우
-      if (this.status === "executing" && (this.actionHistory.length > 0 || this.currentPlan.length > 0)) {
-        console.log("✅ 실행 중 - 일반 모드로 DOM 전송");
-        return "normal";
-      }
-      
-      // 기본적으로 목표가 있으면 전송
+      // 목표만 있으면 새로운 작업 시작
       if (this.currentGoal) {
-        console.log("✅ 목표가 있어서 일반 모드로 DOM 전송");
+        console.log("✅ 새 목표 발견 - 일반 모드로 DOM 전송");
         return "normal";
       }
       
@@ -157,14 +172,30 @@ if (!window.mcpAgentInjected) {
       return false;
     }
     
-    addAction(action) {
+    async addAction(action) {
       this.actionHistory.push({
         ...action,
         timestamp: Date.now(),
         step: this.step
       });
       this.step++;
-      this.save();
+      await this.save();
+    }
+    
+    async setPlan(plan) {
+      this.currentPlan = plan || [];
+      await this.save();
+    }
+    
+    getCurrentStepAction() {
+      if (this.currentPlan.length === 0) return null;
+      // step은 1부터 시작, 배열 인덱스는 0부터
+      const stepIndex = this.step - 1;
+      return this.currentPlan[stepIndex] || null;
+    }
+    
+    isLastStep() {
+      return this.step >= this.currentPlan.length;
     }
     
     addConversation(role, content) {
@@ -182,7 +213,7 @@ if (!window.mcpAgentInjected) {
       this.save();
     }
     
-    setGoal(goal) {
+    async setGoal(goal) {
       console.log("🎯 setGoal() 호출:", goal);
       this.currentGoal = goal;
       this.step = 0;
@@ -192,17 +223,17 @@ if (!window.mcpAgentInjected) {
       this.addConversation('user', goal);
       
       // 새 목표 시작 시 상태 설정
-      this.setStatus("planning", { actionType: null, expectedPageChange: false });
+      await this.setStatus("planning", { actionType: null, expectedPageChange: false });
       
-      console.log("✅ setGoal() 완료:", this.currentGoal);
+      // CRITICAL: Save the goal to Chrome Storage (Cross-Origin Safe)
+      await this.save();
+      
+      console.log("✅ setGoal() 완료 (Cross-Origin Safe):", this.currentGoal);
     }
     
-    setPlan(plan) {
-      this.currentPlan = plan;
-      this.save();
-    }
+
     
-    clear() {
+    async clear() {
       this.sessionId = this.generateUUID();
       this.currentGoal = "";
       this.currentPlan = [];
@@ -212,13 +243,27 @@ if (!window.mcpAgentInjected) {
       this.lastDomSnapshot = "";
       this.createdAt = Date.now();
       
+      // 상태 초기화
+      this.status = "idle";
+      this.lastActionType = null;
+      this.expectedPageChange = false;
+      this.waitingForEvaluation = false;
+      
+      // Clear both Chrome Storage and localStorage
+      try {
+        await chrome.storage.local.remove("mcp-context");
+        console.log("🗑️ Chrome Storage 클리어 완료");
+      } catch (e) {
+        console.log("❌ Chrome Storage 클리어 실패:", e);
+      }
+      
       localStorage.removeItem("mcp-context");
       localStorage.removeItem("mcp-goal");
       localStorage.removeItem("mcp-actionHistory");
       localStorage.removeItem("mcp-currentPlan");
       localStorage.removeItem("mcp-lastDomSnapshot");
       
-      this.save();
+      await this.save();
     }
     
     getContextForServer() {
@@ -246,12 +291,12 @@ if (!window.mcpAgentInjected) {
   console.log("📄 페이지 로드 완료 - 상태 확인");
   
   // 하위 호환성 함수들
-  function saveContext() {
-    context.save();
+  async function saveContext() {
+    await context.save();
   }
   
-  function restoreContext() {
-    context.restore();
+  async function restoreContext() {
+    await context.restore();
     // 변수 동기화
     actionHistory = context.actionHistory;
     currentPlan = context.currentPlan;
@@ -261,8 +306,71 @@ if (!window.mcpAgentInjected) {
   const ws = new WebSocket("ws://localhost:8000/ws");
   console.log("🔌 WebSocket connecting...");
   
-  // 페이지 로드 시 컨텍스트 복원
-  restoreContext();
+  // 페이지 로드 시 컨텍스트 복원 및 평가 처리
+  (async () => {
+    await restoreContext();
+    
+    // 페이지 완전 로드 대기 후 평가 처리
+    if (document.readyState === 'complete') {
+      await handlePageLoadEvaluation();
+    } else {
+      window.addEventListener('load', async () => {
+        await handlePageLoadEvaluation();
+      });
+    }
+  })();
+  
+  // 페이지 로드 완료 후 평가 처리 함수
+  async function handlePageLoadEvaluation() {
+    console.log("📄 페이지 로드 완료 - 평가 처리 시작");
+    
+    // 컨텍스트가 복원되지 않았으면 다시 복원
+    if (!context.currentGoal) {
+      await context.restore();
+    }
+    
+    console.log("🔍 페이지 로드 후 평가 검사:", {
+      goal: context.currentGoal,
+      step: context.step,
+      planLength: context.currentPlan.length,
+      status: context.status,
+      expectedPageChange: context.expectedPageChange,
+      waitingForEvaluation: context.waitingForEvaluation
+    });
+    
+    // 평가가 필요한 상황인지 확인
+    if (context.currentGoal && context.currentPlan.length > 0 && context.waitingForEvaluation) {
+      console.log("✅ 평가 조건 충족 - DOM 전송 시작");
+      logMessage(`📊 페이지 로드 완료 - 상황 평가 시작 (단계: ${context.step})`);
+      
+      // WebSocket 연결 대기
+      console.log("⏳ WebSocket 연결 확인 중...");
+      let retries = 0;
+      const maxRetries = 10;
+      
+      while (ws.readyState !== WebSocket.OPEN && retries < maxRetries) {
+        console.log(`🔄 WebSocket 연결 대기 중... (${retries + 1}/${maxRetries}) - 상태: ${ws.readyState}`);
+        await new Promise(resolve => setTimeout(resolve, 500));
+        retries++;
+      }
+      
+      if (ws.readyState === WebSocket.OPEN) {
+        console.log("✅ WebSocket 연결 확인됨 - 평가 DOM 전송");
+        try {
+          await sendDomForEvaluation();
+          logMessage("📤 상황 평가 요청 전송 완료");
+        } catch (error) {
+          console.error("❌ 평가 DOM 전송 실패:", error);
+          logMessage("❌ 평가 요청 실패");
+        }
+      } else {
+        console.error("❌ WebSocket 연결 실패 - 평가 중단");
+        logMessage("❌ 연결 실패로 평가 중단");
+      }
+    } else {
+      console.log("ℹ️ 평가 조건 미충족 - 평가 건너뜀");
+    }
+  }
 
   // === UI 생성 ===
   const ui = document.createElement("div");
@@ -292,7 +400,7 @@ if (!window.mcpAgentInjected) {
     
     // 컨텍스트에 새로운 목표 설정
     console.log("🎯 목표 설정 시도:", message);
-    context.setGoal(message);
+    await context.setGoal(message);
     console.log("✅ 목표 설정 완료:", context.currentGoal);
     console.log("📊 컨텍스트 상태:", {
       goal: context.currentGoal,
@@ -309,18 +417,10 @@ if (!window.mcpAgentInjected) {
     console.log("⏳ WebSocket 준비 대기 중...");
     await waitUntilReady();
     console.log("✅ WebSocket 준비 완료");
-    // 서버에는 단순한 init 메시지만 전송 (컨텍스트는 DOM과 함께 전송)
+    // 서버에 프롬프트만 전송 (DOM은 필요시에만 요청)
     console.log("📤 init 메시지 전송:", { type: "init", message });
     ws.send(JSON.stringify({ type: "init", message }));
-    console.log("🚀 sendDom() 호출 예정");
-    
-    // 잠시 대기 후 DOM 전송
-    setTimeout(() => {
-      console.log("⏰ setTimeout으로 sendDom() 재호출");
-      sendDom();
-    }, 1000);
-    
-    sendDom();
+    console.log("✅ 프롬프트 우선 분석 모드 - DOM은 서버 요청시에만 전송");
   });
   ui.appendChild(sendButton);
 
@@ -331,7 +431,7 @@ if (!window.mcpAgentInjected) {
     e.stopPropagation();
     
     // 컨텍스트 완전 초기화
-    context.clear();
+    await context.clear();
     
     // 하위 호환성을 위해 변수 동기화
     actionHistory = context.actionHistory;
@@ -387,7 +487,7 @@ if (!window.mcpAgentInjected) {
       
       // 컨텍스트에 새로운 목표 설정
       console.log("🎯 [Enter] 목표 설정 시도:", message);
-      context.setGoal(message);
+      await context.setGoal(message);
       console.log("✅ [Enter] 목표 설정 완료:", context.currentGoal);
       console.log("📊 [Enter] 컨텍스트 상태:", {
         goal: context.currentGoal,
@@ -406,8 +506,7 @@ if (!window.mcpAgentInjected) {
       console.log("✅ [Enter] WebSocket 준비 완료");
       console.log("📤 [Enter] init 메시지 전송:", { type: "init", message });
       ws.send(JSON.stringify({ type: "init", message }));
-      console.log("🚀 [Enter] sendDom() 호출 예정");
-      sendDom();
+      console.log("✅ [Enter] 프롬프트 우선 분석 모드 - DOM은 서버 요청시에만 전송");
     }
   });
 
@@ -426,17 +525,18 @@ if (!window.mcpAgentInjected) {
         // 페이지 로드 후 진행 중인 작업이 있으면 자동 재개
         setTimeout(async () => {
           // 컨텍스트 복원 및 동기화
-          context.restore();
+          await context.restore();
           actionHistory = context.actionHistory;
           currentPlan = context.currentPlan;
           lastDomSnapshot = context.lastDomSnapshot;
           
-          console.log("🔍 재개 검사:", {
+          console.log("🔍 재개 검사 (WebSocket 연결 완료 후):", {
             goal: context.currentGoal,
             step: context.step,
             actionHistoryLength: context.actionHistory.length,
             hasGoal: !!context.currentGoal,
-            hasActions: context.actionHistory.length > 0
+            hasActions: context.actionHistory.length > 0,
+            wsReadyState: ws.readyState
           });
           
           // 현재 상태를 채팅으로 표시 (UI가 생성된 후)
@@ -444,31 +544,7 @@ if (!window.mcpAgentInjected) {
             showCurrentStatus();
           }, 500);
           
-          // 상태 기반 DOM 전송 판단
-          const shouldSend = context.shouldSendDomOnPageLoad();
-          
-          if (shouldSend === "evaluation") {
-            console.log("📊 평가 모드로 DOM 전송");
-            logMessage(`📊 상황 평가: ${context.currentGoal} (단계: ${context.step})`);
-            
-            setTimeout(() => {
-              sendDomForEvaluation();
-            }, 1000);
-            
-          } else if (shouldSend === "normal") {
-            console.log("🔄 일반 모드로 DOM 전송");
-            logMessage(`🔄 작업 재개: ${context.currentGoal} (단계: ${context.step})`);
-            
-            setTimeout(() => {
-              sendDom();
-            }, 1000);
-            
-          } else if (shouldSend === false) {
-            console.log("⏸️ DOM 전송하지 않음 - 대기 상태");
-            if (context.currentGoal) {
-              logMessage(`⏸️ 대기 중: ${context.currentGoal}`);
-            }
-          }
+          console.log("ℹ️ DOM 전송은 페이지 로드 완료 후 handlePageLoadEvaluation()에서 처리됨");
         }, 2000); // 페이지 로딩 완료를 위해 2초 대기
         
         resolve();
@@ -490,45 +566,64 @@ if (!window.mcpAgentInjected) {
           sendQuestion();
         }, 1000);
       }
+    } else if (data.type === "request_dom") {
+      logMessage("📊 서버에서 DOM 요청");
+      setTimeout(() => {
+        sendDom();
+      }, 500);
     } else if (data.type === "plan") {
       // Planning 결과 수신
-      context.setPlan(data.plan);
+      await context.setPlan(data.plan);
       
       // 계획 수립 완료 상태로 변경
-      context.setStatus("executing", { actionType: null, expectedPageChange: false });
+      await context.setStatus("executing", { actionType: null, expectedPageChange: false });
       
       // 하위 호환성을 위해 변수 동기화
       currentPlan = context.currentPlan;
       
       logMessage(`🧠 계획 수립 완료: ${currentPlan.length}단계`);
-      currentPlan.forEach((step, index) => {
-        logMessage(`  ${index + 1}. ${step.action} - ${step.target} (${step.reason})`);
-      });
+      showPlanProgress();
       
       // 계획 수립 완료 후 첫 번째 액션 실행을 위해 DOM 재전송
       console.log("🚀 계획 완료, 첫 번째 액션 실행을 위해 DOM 재전송");
       setTimeout(() => {
         sendDom();
       }, 1000);
+    } else if (data.type === "page_analysis") {
+      // === 새로운 기능: 페이지 분석 결과 표시 ===
+      displayPageAnalysis(data);
+      
     } else if (data.type === "action") {
       // 액션 실행 전 상태 업데이트
       const actionType = data.action.action;
-      const expectedPageChange = (actionType === "goto");
+      const expectedPageChange = (actionType === "goto" || actionType === "google_search");
       
-      context.setStatus("executing", { 
+      await context.setStatus("executing", { 
         actionType: actionType, 
         expectedPageChange: expectedPageChange,
         waitingForEvaluation: expectedPageChange // goto의 경우 평가 대기
       });
       
       // 컨텍스트에 액션 추가
-      context.addAction(data.action);
+      await context.addAction(data.action);
       
       // 하위 호환성을 위해 변수 동기화
       actionHistory = context.actionHistory;
-      saveContext(); // 컨텍스트 저장
-      logMessage(`🤖 액션(${actionHistory.length}): ${JSON.stringify(data.action)}`);
+      await saveContext(); // 컨텍스트 저장
+      logMessage(`🤖 액션(${actionHistory.length}): ${JSON.stringify(data.action)}`, "ACTION_RECEIVED");
+      
+      // 액션 실행 후 진행 상황 업데이트
+      if (context.currentPlan && context.currentPlan.length > 0) {
+        showPlanProgress();
+      }
       console.log("🔍 액션 상세 정보:", data.action);
+      
+      // 액션 실행 로그
+      sendLogToServer("ACTION_EXECUTION", `액션 실행 시작: ${data.action.action}`, {
+        action: data.action,
+        step: context.step,
+        actionCount: actionHistory.length
+      });
       console.log("🔍 action.url 존재 여부:", !!data.action.url);
       console.log("🔍 action.value 존재 여부:", !!data.action.value);
 
@@ -549,8 +644,8 @@ if (!window.mcpAgentInjected) {
       console.log("🔍 action.value 값:", data.action.value);
       await executeMcp([data.action]);
 
-      // goto 액션의 경우 페이지 이동으로 인해 이 코드가 실행되지 않음
-      if (data.action.action === 'goto') {
+      // goto나 google_search 액션의 경우 페이지 이동으로 인해 이 코드가 실행되지 않음
+      if (data.action.action === 'goto' || data.action.action === 'google_search') {
         logMessage("🌐 페이지 이동 중... 새 페이지에서 자동 재개됨");
         return;
       }
@@ -596,9 +691,13 @@ if (!window.mcpAgentInjected) {
       const canvas = document.createElement('canvas');
       const ctx = canvas.getContext('2d');
       
-      // 뷰포트 크기로 캔버스 설정
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
+      // 용량 최적화: 캔버스 크기를 50% 축소
+      const scale = 0.5;
+      canvas.width = Math.floor(window.innerWidth * scale);
+      canvas.height = Math.floor(window.innerHeight * scale);
+      
+      // 스케일 적용을 위한 컨텍스트 변환
+      ctx.scale(scale, scale);
       
       console.log(`📐 캔버스 크기: ${canvas.width}x${canvas.height}`);
       
@@ -606,12 +705,21 @@ if (!window.mcpAgentInjected) {
       ctx.fillStyle = '#ffffff';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
       
-      // DOM 요소들을 캔버스에 그리기 (개선된 시각적 와이어프레임)
-      const elements = document.querySelectorAll('button, input, a, div, span, img, h1, h2, h3, h4, h5, h6, p, ul, ol, li, form, table, select, textarea');
+      // DOM 요소들을 캔버스에 그리기 (중요한 요소들만 선별)
+      const elements = document.querySelectorAll('button, input, a, h1, h2, h3, img, form, select, textarea');
       console.log(`🎯 캡처할 요소 수: ${elements.length}`);
       
       let drawnElements = 0;
-      elements.forEach(el => {
+      const maxElements = 200; // 최대 200개 요소만 그리기
+      
+      // 요소들을 크기순으로 정렬 (큰 요소가 더 중요)
+      const sortedElements = Array.from(elements).sort((a, b) => {
+        const aSize = a.offsetWidth * a.offsetHeight;
+        const bSize = b.offsetWidth * b.offsetHeight;
+        return bSize - aSize;
+      }).slice(0, maxElements);
+      
+      sortedElements.forEach(el => {
         if (el.offsetParent !== null && !el.closest(`#${EXTENSION_UI_ID}`)) {
           const rect = el.getBoundingClientRect();
           if (rect.width > 5 && rect.height > 5) { // 최소 크기 필터
@@ -632,7 +740,7 @@ if (!window.mcpAgentInjected) {
               ctx.lineWidth = 2;
               ctx.strokeRect(rect.left, rect.top, rect.width, rect.height);
               ctx.fillStyle = '#1976d2';
-              ctx.font = 'bold 12px Arial';
+              ctx.font = 'bold 8px Arial';
               
             } else if (tagName === 'input' || tagName === 'textarea') {
               // 입력창: 연한 회색 배경 + 실선 테두리
@@ -642,7 +750,7 @@ if (!window.mcpAgentInjected) {
               ctx.lineWidth = 1;
               ctx.strokeRect(rect.left, rect.top, rect.width, rect.height);
               ctx.fillStyle = '#495057';
-              ctx.font = '11px Arial';
+              ctx.font = '7px Arial';
               
             } else if (tagName === 'select') {
               // 드롭다운: 노란색 배경
@@ -652,7 +760,7 @@ if (!window.mcpAgentInjected) {
               ctx.lineWidth = 1;
               ctx.strokeRect(rect.left, rect.top, rect.width, rect.height);
               ctx.fillStyle = '#856404';
-              ctx.font = '11px Arial';
+              ctx.font = '7px Arial';
               
             } else if (tagName === 'a') {
               // 링크: 파란색 점선 테두리
@@ -661,7 +769,7 @@ if (!window.mcpAgentInjected) {
               ctx.setLineDash([3, 3]);
               ctx.strokeRect(rect.left, rect.top, rect.width, rect.height);
               ctx.fillStyle = '#0d6efd';
-              ctx.font = '11px Arial';
+              ctx.font = '7px Arial';
               
             } else if (['h1', 'h2', 'h3', 'h4', 'h5', 'h6'].includes(tagName)) {
               // 제목: 주황색 배경 + 굵은 테두리
@@ -671,7 +779,7 @@ if (!window.mcpAgentInjected) {
               ctx.lineWidth = 2;
               ctx.strokeRect(rect.left, rect.top, rect.width, rect.height);
               ctx.fillStyle = '#f57c00';
-              const fontSize = tagName === 'h1' ? 16 : tagName === 'h2' ? 14 : 13;
+              const fontSize = tagName === 'h1' ? 10 : tagName === 'h2' ? 9 : 8;
               ctx.font = `bold ${fontSize}px Arial`;
               
             } else if (tagName === 'img') {
@@ -682,12 +790,12 @@ if (!window.mcpAgentInjected) {
               ctx.lineWidth = 1;
               ctx.strokeRect(rect.left, rect.top, rect.width, rect.height);
               ctx.fillStyle = '#4caf50';
-              ctx.font = '12px Arial';
+              ctx.font = '8px Arial';
               const centerX = rect.left + rect.width / 2 - 15;
               const centerY = rect.top + rect.height / 2 + 4;
               ctx.fillText('[IMG]', centerX, centerY);
               ctx.fillStyle = '#2e7d32';
-              ctx.font = '10px Arial';
+              ctx.font = '6px Arial';
               
             } else if (['ul', 'ol', 'li'].includes(tagName)) {
               // 리스트: 연한 보라색
@@ -696,7 +804,7 @@ if (!window.mcpAgentInjected) {
               ctx.setLineDash([2, 2]);
               ctx.strokeRect(rect.left, rect.top, rect.width, rect.height);
               ctx.fillStyle = '#9c27b0';
-              ctx.font = '11px Arial';
+              ctx.font = '7px Arial';
               
             } else if (tagName === 'form') {
               // 폼: 연한 파란색 배경
@@ -707,7 +815,7 @@ if (!window.mcpAgentInjected) {
               ctx.setLineDash([5, 3]);
               ctx.strokeRect(rect.left, rect.top, rect.width, rect.height);
               ctx.fillStyle = '#4682b4';
-              ctx.font = '11px Arial';
+              ctx.font = '7px Arial';
               
             } else {
               // 기타 요소: 연한 회색
@@ -715,14 +823,14 @@ if (!window.mcpAgentInjected) {
               ctx.lineWidth = 0.5;
               ctx.strokeRect(rect.left, rect.top, rect.width, rect.height);
               ctx.fillStyle = '#6c757d';
-              ctx.font = '10px Arial';
+              ctx.font = '6px Arial';
             }
             
-            // 텍스트 추가
+            // 텍스트 추가 (더 짧게 제한)
             const text = el.innerText || el.placeholder || el.value || el.alt || el.title || '';
-            if (text.trim() && rect.width > 20 && rect.height > 10) {
-              const maxWidth = rect.width - 6;
-              const maxChars = Math.floor(maxWidth / 6);
+            if (text.trim() && rect.width > 15 && rect.height > 8) {
+              const maxWidth = rect.width - 4;
+              const maxChars = Math.min(Math.floor(maxWidth / 4), 20); // 최대 20자 제한
               const truncatedText = text.trim().substring(0, maxChars);
               
               if (truncatedText) {
@@ -739,8 +847,8 @@ if (!window.mcpAgentInjected) {
       
       console.log(`✅ 그려진 요소 수: ${drawnElements}`);
       
-      // Canvas를 base64로 변환
-      const dataURL = canvas.toDataURL('image/png');
+      // Canvas를 JPEG로 변환 (압축률 높음, 품질 70%)
+      const dataURL = canvas.toDataURL('image/jpeg', 0.7);
       console.log('✅ 화면 캡처 성공');
       console.log(`📊 데이터 URL 길이: ${dataURL.length} characters`);
       console.log(`📊 데이터 URL 접두사: ${dataURL.substring(0, 50)}...`);
@@ -790,6 +898,8 @@ if (!window.mcpAgentInjected) {
       return;
     }
     
+    console.log("📤 평가용 DOM 전송 시작 - readyState:", ws.readyState);
+    
     const dom = summarizeDom();
     const image = await captureScreen();
     
@@ -807,9 +917,10 @@ if (!window.mcpAgentInjected) {
     
     logMessage(`📊 상황 평가 요청 (단계: ${context.step})`);
     console.log("📊 평가용 컨텍스트:", context.getContextForServer());
+    console.log("📤 평가용 DOM 전송:", payload.type);
     ws.send(JSON.stringify(payload));
     
-    context.save();
+    await context.save();
   }
 
   // === DOM 전송 ===
@@ -827,6 +938,8 @@ if (!window.mcpAgentInjected) {
       console.log("ℹ️ 목표가 설정되지 않아 DOM 전송을 건너뜁니다. Extension UI에서 목표를 입력하세요.");
       return;
     }
+    
+    console.log("✅ WebSocket 이미 연결됨 (일반 모드) - readyState:", ws.readyState);
     
     const dom = summarizeDom();
     const image = await captureScreen();
@@ -853,13 +966,168 @@ if (!window.mcpAgentInjected) {
     logMessage(`📤 DOM + 이미지 전송 (단계: ${context.step})`);
     console.log("📤 전송할 컨텍스트:", context.getContextForServer());
     console.log("📤 이미지 데이터 존재:", !!payload.image);
+    console.log("📤 일반 DOM 전송:", payload.type);
     ws.send(JSON.stringify(payload));
     
-    context.save();
+    await context.save();
   }
 
   function snapshotDom() {
     return JSON.stringify(summarizeDom());
+  }
+
+  // === 새로운 기능: 페이지 분석 결과 표시 ===
+  function displayPageAnalysis(analysisData) {
+    console.log("📊 페이지 분석 결과 수신:", analysisData);
+    
+    const { web_guide, page_understanding, progress_evaluation } = analysisData;
+    
+    // 웹 가이드 표시
+    if (web_guide) {
+      logMessage(`🎯 웹 가이드: ${web_guide}`, "PAGE_ANALYSIS");
+    }
+    
+    // 페이지 이해도 표시 (3영역 구조)
+    if (page_understanding) {
+      const { page_type, understanding_level, layout_confidence, menu_area, function_area, content_area, item_structure, clickable_items, visual_patterns } = page_understanding;
+      
+      logMessage(`📄 페이지 구조 분석:`, "PAGE_ANALYSIS");
+      logMessage(`  • 타입: ${page_type} | 이해도: ${understanding_level} | 레이아웃: ${layout_confidence}`, "PAGE_ANALYSIS");
+      
+      // 항목 구조 타입 표시
+      if (item_structure && item_structure !== 'unknown') {
+        const structureEmoji = {
+          'table_list': '📊',
+          'ul_list': '📋', 
+          'card_layout': '🗂️'
+        };
+        const structureNames = {
+          'table_list': '테이블 리스트 (Gmail 스타일)',
+          'ul_list': 'UL/LI 리스트 (Daum Mail 스타일)',
+          'card_layout': '카드 레이아웃 (모던 UI 스타일)'
+        };
+        
+        logMessage(`  • ${structureEmoji[item_structure]} 항목구조: ${structureNames[item_structure]}`, "PAGE_ANALYSIS");
+      }
+      
+      // 3영역 구조 표시
+      if (menu_area && menu_area.length > 0) {
+        const menuItems = menu_area.slice(0, 3).map(m => m.text || m.tag).filter(t => t).join(', ');
+        logMessage(`  • 🧭 메뉴영역(좌측): ${menu_area.length}개 - ${menuItems}${menu_area.length > 3 ? '...' : ''}`, "PAGE_ANALYSIS");
+      }
+      
+      if (function_area && function_area.length > 0) {
+        const funcItems = function_area.slice(0, 3).map(f => f.text || f.tag).filter(t => t).join(', ');
+        logMessage(`  • 🔧 기능영역(상단): ${function_area.length}개 - ${funcItems}${function_area.length > 3 ? '...' : ''}`, "PAGE_ANALYSIS");
+      }
+      
+      if (content_area && content_area.length > 0) {
+        const contentItems = content_area.slice(0, 3).map(c => c.text || c.tag).filter(t => t).join(', ');
+        logMessage(`  • 📋 컨텐츠영역(메인): ${content_area.length}개 - ${contentItems}${content_area.length > 3 ? '...' : ''}`, "PAGE_ANALYSIS");
+      }
+      
+      // 클릭 가능한 항목들 표시
+      if (clickable_items && clickable_items.length > 0) {
+        const subjectItems = clickable_items.filter(item => item.is_subject);
+        const mainItems = subjectItems.length > 0 ? subjectItems : clickable_items;
+        
+        logMessage(`  • 🎯 클릭 가능한 항목: ${clickable_items.length}개 발견`, "PAGE_ANALYSIS");
+        
+        if (mainItems.length > 0) {
+          const firstItem = mainItems[0];
+          logMessage(`  • 📌 첫 번째 항목: "${firstItem.text}" (${firstItem.class})`, "PAGE_ANALYSIS");
+          
+          // 권장 셀렉터 제안
+          if (item_structure === 'ul_list') {
+            logMessage(`  • 💡 권장 셀렉터: ul.list_mail li:first-child a.link_subject`, "PAGE_ANALYSIS");
+          } else if (item_structure === 'table_list') {
+            logMessage(`  • 💡 권장 셀렉터: tbody tr:first-child a`, "PAGE_ANALYSIS");
+          } else {
+            logMessage(`  • 💡 권장 셀렉터: .items .item:first-child a`, "PAGE_ANALYSIS");
+          }
+        }
+      } else {
+        logMessage(`  • ⚠️ 클릭 가능한 항목을 찾을 수 없음`, "PAGE_ANALYSIS");
+      }
+      
+      // 와이어프레임 패턴 분석 표시
+      if (visual_patterns) {
+        const { repeated_items, primary_content_links, visual_weight_items } = visual_patterns;
+        
+        if (repeated_items > 0) {
+          logMessage(`  • 🔄 반복 패턴: ${repeated_items}개 항목이 일관된 구조로 배치됨`, "PAGE_ANALYSIS");
+        }
+        
+        if (visual_weight_items && visual_weight_items.length > 0) {
+          const topPattern = visual_weight_items[0];
+          logMessage(`  • 📐 주요 구조: ${topPattern.pattern} (${topPattern.count}회 반복)`, "PAGE_ANALYSIS");
+        }
+        
+        if (primary_content_links && primary_content_links.length > 0) {
+          const topLink = primary_content_links[0];
+          logMessage(`  • 🎯 최우선 링크: "${topLink.text}" (우선순위: ${topLink.priority})`, "PAGE_ANALYSIS");
+          
+          // 다음 메일 구조 특화 메시지
+          if (topLink.class && topLink.class.includes('link_subject')) {
+            logMessage(`  • 💡 다음메일 감지: ul.list_mail li:first-child a.link_subject 권장`, "PAGE_ANALYSIS");
+          }
+        }
+        
+        // 와이어프레임 기반 클릭 가이드
+        if (repeated_items > 2 && primary_content_links && primary_content_links.length > 0) {
+          logMessage(`  • 📋 와이어프레임 분석: 수직 반복 구조 감지 → 첫 번째 항목의 주요 링크 클릭 권장`, "PAGE_ANALYSIS");
+        }
+      }
+    }
+    
+    // 목표 진행도 표시
+    if (progress_evaluation) {
+      const { progress_percentage, current_phase, completion_feasibility, recommendations } = progress_evaluation;
+      
+      logMessage(`🎯 목표 진행도:`, "PROGRESS_EVALUATION");
+      logMessage(`  • 진행률: ${progress_percentage.toFixed(1)}% | 단계: ${current_phase} | 완료가능성: ${completion_feasibility}`, "PROGRESS_EVALUATION");
+      
+      if (recommendations && recommendations.length > 0) {
+        logMessage(`  • 권장사항: ${recommendations.join(', ')}`, "PROGRESS_EVALUATION");
+      }
+    }
+  }
+
+  // 계획 진행 상황을 표시
+  function showPlanProgress() {
+    if (!context.currentPlan || context.currentPlan.length === 0) {
+      return;
+    }
+    
+    const totalSteps = context.currentPlan.length;
+    const currentStepIndex = context.step; // step은 0부터 시작하는 인덱스로 사용
+    
+    logMessage(`📋 계획 진행 상황:`);
+    
+    context.currentPlan.forEach((step, index) => {
+      const stepNumber = index + 1;
+      let status = "";
+      
+      if (index < currentStepIndex) {
+        // 완료된 단계
+        status = "✅";
+      } else if (index === currentStepIndex) {
+        // 현재 진행중인 단계
+        status = "🔄";
+      } else {
+        // 앞으로 진행할 단계
+        status = "⏳";
+      }
+      
+      const actionText = step.action;
+      const targetText = step.target || step.reason || "";
+      
+      logMessage(`  ${status} ${stepNumber}. ${actionText} - ${targetText.substring(0, 40)}${targetText.length > 40 ? '...' : ''}`);
+    });
+    
+    const completedSteps = currentStepIndex;
+    const remainingSteps = totalSteps - currentStepIndex;
+    logMessage(`📊 진행: ${completedSteps}/${totalSteps} 완료 (남은 단계: ${remainingSteps}개)`);
   }
 
   // 현재 상태를 채팅으로 표시
@@ -882,14 +1150,12 @@ if (!window.mcpAgentInjected) {
     
     if (context.currentGoal) {
       logMessage(`🎯 목표: ${context.currentGoal}`);
-      logMessage(`📊 진행: ${context.step}단계 (총 ${context.actionHistory.length}개 액션 완료)`);
       
+      // 계획이 있으면 진행 상황 표시, 없으면 단순 진행 표시
       if (context.currentPlan && context.currentPlan.length > 0) {
-        logMessage(`📋 계획: ${context.currentPlan.length}단계`);
-        const currentPlanStep = context.currentPlan[context.step] || context.currentPlan[context.currentPlan.length - 1];
-        if (currentPlanStep) {
-          logMessage(`   → 다음: ${currentPlanStep.action} - ${currentPlanStep.target}`);
-        }
+        showPlanProgress();
+      } else {
+        logMessage(`📊 진행: ${context.step}단계 (총 ${context.actionHistory.length}개 액션 완료)`);
       }
       
       if (context.lastActionType) {
@@ -911,39 +1177,156 @@ if (!window.mcpAgentInjected) {
     logMessage("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
   }
 
-  function logMessage(text) {
+  function logMessage(text, eventType = "UI") {
     const div = document.createElement("div");
     div.textContent = text;
     div.style.margin = "4px 0";
     div.style.color = "#000";
     log.appendChild(div);
     log.scrollTop = log.scrollHeight;
+    
+    // 로그 전송 관련 메시지와 반복적인 UI 메시지는 서버로 전송하지 않음
+    const skipLogPatterns = [
+      "로그", "LOG", "━━━", "WebSocket", "메시지", "전송", "수신", "연결"
+    ];
+    
+    const shouldSkip = skipLogPatterns.some(pattern => text.includes(pattern)) || eventType === "LOG_RELATED";
+    
+    if (!shouldSkip) {
+      sendLogToServer(eventType, text);
+    }
+  }
+  
+  function sendLogToServer(eventType, message, extraData = {}) {
+    // WebSocket이 연결되어 있고 목표가 설정된 경우에만 로그 전송
+    if (ws.readyState === WebSocket.OPEN && context.currentGoal) {
+      try {
+        ws.send(JSON.stringify({
+          type: "client_log",
+          event_type: eventType,
+          message: message,
+          extra_data: extraData,
+          timestamp: new Date().toISOString()
+        }));
+      } catch (e) {
+        console.error("로그 전송 실패:", e);
+      }
+    }
   }
 
   function summarizeDom() {
-    return Array.from(document.querySelectorAll('button, input, a[href], textarea, select, li, div, span'))
-      .filter(el => el.offsetParent !== null && !el.closest(`#${EXTENSION_UI_ID}`))
-      .map(el => ({
-        tag: el.tagName.toLowerCase(),
-        text: el.innerText || el.placeholder || el.value || '',
-        id: el.id,
-        name: el.name,
-        type: el.type,
-        class: el.className,
-        selector: getSelector(el)
-      }));
+    try {
+      // 단계적 요소 수집 - 먼저 기본 요소들부터
+      const basicElements = Array.from(document.querySelectorAll('button, input, a, textarea, select, li, div, span'));
+      console.log(`🔍 기본 요소 수집: ${basicElements.length}개`);
+      
+      // 추가 요소들 수집 시도
+      const additionalElements = [];
+      try {
+        additionalElements.push(...Array.from(document.querySelectorAll('form, label, ul, ol, table, nav, header, main, section')));
+        console.log(`🔍 추가 요소 수집: ${additionalElements.length}개`);
+      } catch (e) {
+        console.log(`⚠️ 추가 요소 수집 실패: ${e.message}`);
+      }
+      
+      // 전체 요소 목록 결합
+      const allElements = [...basicElements, ...additionalElements];
+      console.log(`🔍 전체 요소 수집: ${allElements.length}개`);
+      
+      // 객체 필터링 없이 모든 요소 포함 (확장 프로그램 UI만 제외)
+      return allElements
+        .filter(el => {
+          try {
+            if (!el) return false;
+            // 확장 프로그램 UI만 제외
+            return !el.closest(`#${EXTENSION_UI_ID}`);
+          } catch (e) {
+            return true; // 오류 발생시 포함
+          }
+        })
+        .map(el => {
+          try {
+            // 안전한 className 처리
+            let safeClassName = '';
+            if (el.className) {
+              if (typeof el.className === 'string') {
+                safeClassName = el.className;
+              } else if (el.className.toString) {
+                safeClassName = el.className.toString();
+              }
+            }
+            
+            // 기본 정보만 수집 (속성 필터링)
+            const result = {
+              tag: el.tagName ? el.tagName.toLowerCase() : 'unknown',
+              selector: getSelector(el)
+            };
+            
+            // 텍스트 정보 (있을 때만)
+            const text = el.innerText || el.placeholder || el.value || el.title || '';
+            if (text.trim()) result.text = text.trim();
+            
+            // 주요 속성들 (값이 있을 때만 포함)
+            if (el.id) result.id = el.id;
+            if (el.name) result.name = el.name;
+            if (el.type) result.type = el.type;
+            if (safeClassName) result.class = safeClassName;
+            if (el.href) result.href = el.href;
+            if (el.value) result.value = el.value;
+            
+            return result;
+          } catch (e) {
+            console.log(`⚠️ DOM 요소 처리 오류: ${e.message}`);
+            return {
+              tag: 'unknown',
+              text: '',
+              id: '',
+              name: '',
+              type: '',
+              class: '',
+              selector: 'unknown'
+            };
+          }
+        });
+    } catch (error) {
+      console.error('DOM 요약 오류:', error);
+      return [];
+    }
   }
 
   function getSelector(el) {
-    // 우선순위: id > name > class > tag
-    if (el.id) return `#${el.id}`;
-    if (el.name) return `${el.tagName.toLowerCase()}[name='${el.name}']`;
-    if (el.type) return `${el.tagName.toLowerCase()}[type='${el.type}']`;
-    if (el.className) {
-      const classes = el.className.split(' ').filter(c => c).join('.');
-      if (classes) return `${el.tagName.toLowerCase()}.${classes}`;
+    if (!el || !el.tagName) return 'unknown';
+    
+    try {
+      // 우선순위: id > name > class > tag
+      if (el.id) return `#${el.id}`;
+      if (el.name) return `${el.tagName.toLowerCase()}[name='${el.name}']`;
+      if (el.type) return `${el.tagName.toLowerCase()}[type='${el.type}']`;
+      
+      // 안전한 className 처리
+      if (el.className) {
+        try {
+          let classNameStr = '';
+          if (typeof el.className === 'string') {
+            classNameStr = el.className;
+          } else if (el.className.toString) {
+            classNameStr = el.className.toString();
+          }
+          
+          if (classNameStr) {
+            const classes = classNameStr.split(' ').filter(c => c && c.trim()).join('.');
+            if (classes) return `${el.tagName.toLowerCase()}.${classes}`;
+          }
+        } catch (e) {
+          console.log(`⚠️ getSelector className 처리 오류: ${e.message}`);
+        }
+      }
+      
+      return el.tagName.toLowerCase();
+    } catch (error) {
+      console.log(`⚠️ getSelector 전체 오류: ${error.message}`);
+      return 'unknown';
     }
-    return el.tagName.toLowerCase();
   }
 
   function isBrowserUIAction(action) {
@@ -1015,48 +1398,101 @@ if (!window.mcpAgentInjected) {
             
           case "google_search":
             console.log("🔍 google_search 액션 디버깅:", action);
-            if (action.query) {
+            if (action.url) {
+              // 서버에서 이미 분석한 최적의 URL로 직접 이동
+              saveContext(); // 페이지 이동 전 컨텍스트 저장
+              window.location.href = action.url;
+              logMessage(`🔍 Google 검색 완료: ${action.query || 'unknown'}`);
+              logMessage(`✅ 선택된 사이트로 이동: ${action.url}`);
+            } else if (action.query) {
+              // 폴백: URL이 없으면 Google 검색 페이지로 이동
               const searchQuery = encodeURIComponent(action.query);
               const googleSearchUrl = `https://www.google.com/search?q=${searchQuery}`;
               saveContext(); // 페이지 이동 전 컨텍스트 저장
               window.location.href = googleSearchUrl;
-              logMessage(`🔍 Google 검색: ${action.query}`);
+              logMessage(`🔍 Google 검색 폴백: ${action.query}`);
               logMessage(`✅ 검색 페이지로 이동: ${googleSearchUrl}`);
             } else {
-              logMessage(`❌ Google 검색 실패: 검색어가 지정되지 않음`);
+              logMessage(`❌ Google 검색 실패: URL과 검색어가 모두 지정되지 않음`);
               logMessage(`🔍 액션 내용: ${JSON.stringify(action)}`);
             }
             break;
             
           case "click":
+            console.log(`🖱️ [클릭 시작] selector: "${action.selector}", text: "${action.text}"`);
             const clickEl = findElement(action.selector, action.text);
             if (clickEl) {
+              console.log(`🎯 [클릭 준비] 요소 발견됨, 스크롤 시작`);
               clickEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
               await new Promise(resolve => setTimeout(resolve, 500));
-              clickEl.click();
-              logMessage(`✅ 클릭 성공: ${action.selector}${action.text ? ` (${action.text})` : ''}`);
+              
+              console.log(`🖱️ [클릭 실행] 이벤트 발생 시작`);
+              // Medium과 같은 SPA에서 클릭 이벤트 강화
+              try {
+                // 1. 포커스 먼저 설정
+                clickEl.focus();
+                
+                // 2. 마우스 이벤트 시뮬레이션
+                clickEl.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+                clickEl.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+                clickEl.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+                
+                // 3. 추가 이벤트들 (React 컴포넌트용)
+                clickEl.dispatchEvent(new Event('change', { bubbles: true }));
+                clickEl.dispatchEvent(new Event('input', { bubbles: true }));
+                
+                console.log(`✅ [클릭 완료] 모든 이벤트 발생됨`);
+                logMessage(`✅ 클릭 성공: ${action.selector}${action.text ? ` (${action.text})` : ''}`);
+                console.log(`🎯 클릭된 요소:`, clickEl);
+                console.log(`🎯 요소 정보:`, {
+                  tagName: clickEl.tagName,
+                  className: clickEl.className,
+                  textContent: clickEl.textContent?.substring(0, 50),
+                  visible: clickEl.offsetParent !== null,
+                  clickable: clickEl.onclick || clickEl.getAttribute('role') === 'button'
+                });
+              } catch (clickError) {
+                console.error("클릭 이벤트 실행 오류:", clickError);
+                // 기본 클릭 시도
+                clickEl.click();
+                logMessage(`✅ 기본 클릭 성공: ${action.selector}${action.text ? ` (${action.text})` : ''}`);
+              }
             } else {
+              console.log(`❌ [클릭 실패] 요소를 찾을 수 없음`);
               logMessage(`❌ 클릭 실패: ${action.selector}${action.text ? ` (${action.text})` : ''}`);
               console.warn("❌ Click element not found:", action.selector, action.text);
               
-              // 대안 제시
-              const alternatives = findAlternativeElements(action.selector, action.text);
-              if (alternatives.length > 0) {
-                logMessage(`💡 대안 요소들 발견: ${alternatives.length}개`);
-                alternatives.slice(0, 3).forEach((alt, i) => {
-                  logMessage(`  ${i + 1}. ${alt.tag}${alt.class ? '.' + alt.class : ''} - "${alt.text}"`);
-                });
-                
-                // 사용자에게 대안 선택 옵션 제공
-                const useAlternative = confirm(`요소를 찾지 못했습니다. 대안 요소를 사용하시겠습니까?\n\n${alternatives[0].tag} - "${alternatives[0].text}"`);
-                if (useAlternative && alternatives[0]) {
-                  const altEl = document.querySelector(alternatives[0].selector);
-                  if (altEl) {
-                    altEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                    await new Promise(resolve => setTimeout(resolve, 500));
-                    altEl.click();
-                    logMessage(`✅ 대안 요소 클릭 성공: ${alternatives[0].selector}`);
+              // SPA에서는 요소가 동적으로 로드될 수 있으므로 재시도
+              logMessage(`🔄 동적 로딩 대기 후 재시도...`);
+              await new Promise(resolve => setTimeout(resolve, 2000));
+              
+              const retryEl = findElement(action.selector, action.text);
+              if (retryEl) {
+                retryEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                await new Promise(resolve => setTimeout(resolve, 500));
+                retryEl.click();
+                logMessage(`✅ 재시도 클릭 성공: ${action.selector}${action.text ? ` (${action.text})` : ''}`);
+              } else {
+                // 대안 제시
+                const alternatives = findAlternativeElements(action.selector, action.text);
+                if (alternatives.length > 0) {
+                  logMessage(`💡 대안 요소들 발견: ${alternatives.length}개`);
+                  alternatives.slice(0, 3).forEach((alt, i) => {
+                    logMessage(`  ${i + 1}. ${alt.tag}${alt.class ? '.' + alt.class : ''} - "${alt.text}"`);
+                  });
+                  
+                  // 첫 번째 대안 자동 시도
+                  if (alternatives[0]) {
+                    const altEl = document.querySelector(alternatives[0].selector);
+                    if (altEl) {
+                      altEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                      await new Promise(resolve => setTimeout(resolve, 500));
+                      altEl.click();
+                      logMessage(`✅ 대안 요소 자동 클릭: ${alternatives[0].selector}`);
+                    }
                   }
+                } else {
+                  logMessage(`❌ 대안 요소도 찾을 수 없음`);
                 }
               }
             }
@@ -1072,6 +1508,35 @@ if (!window.mcpAgentInjected) {
               fillEl.dispatchEvent(new Event('input', { bubbles: true }));
               fillEl.dispatchEvent(new Event('change', { bubbles: true }));
               logMessage(`✅ 입력 성공: ${action.selector} = "${action.value}"`);
+              
+              // 전송 버튼 찾기
+              const submitButton = findSubmitButton(fillEl);
+              if (submitButton) {
+                logMessage(`🔍 전송 버튼 발견: ${submitButton.tagName}${submitButton.type ? `[${submitButton.type}]` : ''}`);
+              } else {
+                // 전송 버튼이 없으면 Enter 키 입력
+                logMessage(`🎯 전송 버튼 없음 → Enter 키 입력`);
+                await new Promise(resolve => setTimeout(resolve, 300));
+                fillEl.dispatchEvent(new KeyboardEvent('keydown', { 
+                  key: 'Enter', 
+                  keyCode: 13, 
+                  which: 13, 
+                  bubbles: true 
+                }));
+                fillEl.dispatchEvent(new KeyboardEvent('keypress', { 
+                  key: 'Enter', 
+                  keyCode: 13, 
+                  which: 13, 
+                  bubbles: true 
+                }));
+                fillEl.dispatchEvent(new KeyboardEvent('keyup', { 
+                  key: 'Enter', 
+                  keyCode: 13, 
+                  which: 13, 
+                  bubbles: true 
+                }));
+                logMessage(`⌨️ Enter 키 입력 완료`);
+              }
             } else {
               logMessage(`❌ 입력 실패: ${action.selector}${action.text ? ` (${action.text})` : ''}`);
               console.warn("❌ Fill element not found:", action.selector, action.text);
@@ -1120,15 +1585,27 @@ if (!window.mcpAgentInjected) {
   function findElement(selector, text) {
     if (!selector) return null;
     
+    // 상세한 탐지 과정 로깅
+    console.log(`🔍 [요소 탐지 시작] selector: "${selector}", text: "${text || ''}"`);
+    logMessage(`🔍 요소 탐지: ${selector}${text ? ` (텍스트: "${text}")` : ''}`);
+    
+    const startTime = Date.now();
     let elements = [];
     
     try {
       // 1. CSS 선택자로 직접 검색
-      elements = document.querySelectorAll(selector);
+      console.log(`🔍 [1단계] CSS 직접 검색: ${selector}`);
+      try {
+        elements = Array.from(document.querySelectorAll(selector) || []);
+        console.log(`   → 발견: ${elements.length}개`);
+      } catch (selectorError) {
+        console.log(`   → CSS 선택자 오류: ${selectorError.message}`);
+        elements = [];
+      }
       
       // 2. 선택자가 실패하면 더 유연한 검색 시도
       if (elements.length === 0) {
-        console.log(`🔍 CSS 선택자 실패: ${selector}, 유연한 검색 시도...`);
+        console.log(`🔍 [2단계] CSS 선택자 실패: ${selector}, 유연한 검색 시도...`);
         
         // 태그와 클래스 기반 검색
         const tagMatch = selector.match(/^(\w+)/);
@@ -1137,20 +1614,43 @@ if (!window.mcpAgentInjected) {
         if (tagMatch && classMatch) {
           const tag = tagMatch[1];
           const className = classMatch[1];
-          elements = document.querySelectorAll(`${tag}.${className}`);
+          const altSelector = `${tag}.${className}`;
+          console.log(`🔍 [2-1] 태그+클래스: ${altSelector}`);
+          try {
+            elements = Array.from(document.querySelectorAll(altSelector) || []);
+            console.log(`   → 발견: ${elements.length}개`);
+          } catch (e) {
+            console.log(`   → 태그+클래스 검색 실패: ${e.message}`);
+            elements = [];
+          }
         } else if (tagMatch) {
           // 태그만으로 검색
-          elements = document.querySelectorAll(tagMatch[1]);
+          console.log(`🔍 [2-2] 태그만: ${tagMatch[1]}`);
+          try {
+            elements = Array.from(document.querySelectorAll(tagMatch[1]) || []);
+            console.log(`   → 발견: ${elements.length}개`);
+          } catch (e) {
+            console.log(`   → 태그 검색 실패: ${e.message}`);
+            elements = [];
+          }
         }
       }
       
       // 3. 텍스트 기반 필터링
-      if (text) {
-        elements = Array.from(elements).filter(el => {
-          const elementText = (el.innerText || el.textContent || el.value || '').toLowerCase();
-          const searchText = text.toLowerCase();
-          return elementText.includes(searchText);
-        });
+      if (text && elements && elements.length > 0) {
+        console.log(`🔍 [3단계] 텍스트 필터링: "${text}" (필터 전: ${elements.length}개)`);
+        try {
+          elements = elements.filter(el => {
+            if (!el) return false;
+            const elementText = (el.innerText || el.textContent || el.value || '').toLowerCase();
+            const searchText = text.toLowerCase();
+            return elementText.includes(searchText);
+          });
+          console.log(`   → 텍스트 필터 후: ${elements.length}개`);
+        } catch (filterError) {
+          console.log(`   → 텍스트 필터링 오류: ${filterError.message}`);
+          // 필터링 실패 시 원본 elements 유지
+        }
       }
       
       // 4. 추가적인 유연한 검색 (텍스트가 있는 경우)
@@ -1202,14 +1702,111 @@ if (!window.mcpAgentInjected) {
         });
       }
       
+      // 7. Medium 특화 검색
+      if (elements.length === 0 && window.location.hostname.includes('medium')) {
+        console.log(`🔍 Medium 특화 검색: ${selector}`);
+        
+        // Medium의 일반적인 클릭 가능한 요소들
+        const mediumElements = document.querySelectorAll(`
+          [data-testid], [data-action], [role="button"], [role="link"],
+          .crayons-btn, .c-btn, [class*="button"], [class*="link"],
+          article, h1, h2, h3, [class*="title"], [class*="story"],
+          div[tabindex], span[tabindex], p[tabindex]
+        `);
+        
+        elements = Array.from(mediumElements).filter(el => {
+          // 보이는 요소인지 확인
+          const isVisible = el.offsetParent !== null && 
+                           el.getBoundingClientRect().width > 0 && 
+                           el.getBoundingClientRect().height > 0;
+          
+          // 텍스트가 있거나 클릭 가능한 요소인지 확인
+          const hasText = el.innerText && el.innerText.trim().length > 0;
+          const isInteractive = el.onclick || el.getAttribute('tabindex') || 
+                               el.getAttribute('role') === 'button' ||
+                               el.getAttribute('role') === 'link' ||
+                               el.style.cursor === 'pointer';
+          
+          return isVisible && (hasText || isInteractive);
+        });
+        
+        // 텍스트 매칭이 있으면 우선적으로 필터링
+        if (text && elements.length > 0) {
+          const textMatched = elements.filter(el => {
+            const elementText = (el.innerText || el.textContent || '').toLowerCase();
+            return elementText.includes(text.toLowerCase());
+          });
+          if (textMatched.length > 0) {
+            elements = textMatched;
+          }
+        }
+      }
+      
     } catch (error) {
       console.error(`❌ 요소 검색 오류: ${error}`);
       return null;
     }
     
     if (elements.length > 0) {
-      console.log(`✅ 요소 발견: ${selector} (${elements.length}개)`);
-      return elements[0];
+      const elapsedTime = Date.now() - startTime;
+      const foundElement = elements[0];
+      
+      console.log(`✅ [요소 탐지 성공] ${selector} (${elements.length}개 발견, ${elapsedTime}ms)`);
+      console.log(`📍 선택된 요소:`, foundElement);
+      
+      // 안전한 className 처리
+      let classNameStr = '';
+      try {
+        if (foundElement.className) {
+          if (typeof foundElement.className === 'string') {
+            classNameStr = foundElement.className;
+          } else if (foundElement.className.toString) {
+            classNameStr = foundElement.className.toString();
+          }
+        }
+      } catch (e) {
+        console.log(`⚠️ className 처리 오류: ${e.message}`);
+        classNameStr = '';
+      }
+      
+      // 안전한 속성 접근
+      let attributesInfo = [];
+      try {
+        if (foundElement.attributes && foundElement.attributes.length > 0) {
+          attributesInfo = Array.from(foundElement.attributes).map(attr => `${attr.name}="${attr.value}"`);
+        }
+      } catch (e) {
+        console.log(`⚠️ attributes 처리 오류: ${e.message}`);
+        attributesInfo = [];
+      }
+      
+      console.log(`📊 요소 상세 정보:`, {
+        tagName: foundElement.tagName || 'unknown',
+        className: classNameStr,
+        id: foundElement.id || '',
+        textContent: (foundElement.textContent || '').substring(0, 100),
+        visible: foundElement.offsetParent !== null,
+        rect: foundElement.getBoundingClientRect(),
+        attributes: attributesInfo,
+        clickable: !!(foundElement.onclick || foundElement.getAttribute('role') === 'button' || foundElement.style.cursor === 'pointer')
+      });
+      
+      // 안전한 표시용 클래스명 추출
+      let displayClassName = '';
+      if (classNameStr) {
+        try {
+          const firstClass = classNameStr.split(' ')[0];
+          if (firstClass) {
+            displayClassName = '.' + firstClass;
+          }
+        } catch (e) {
+          console.log(`⚠️ 표시용 클래스명 처리 오류: ${e.message}`);
+        }
+      }
+      
+      logMessage(`✅ 요소 발견: ${foundElement.tagName}${displayClassName} - "${(foundElement.textContent || '').substring(0, 30)}"`);
+      
+      return foundElement;
     } else {
       console.warn(`❌ 요소 없음: ${selector}${text ? ` (text: "${text}")` : ''}`);
       
@@ -1259,16 +1856,34 @@ if (!window.mcpAgentInjected) {
         const tag = tagMatch[1];
         const elements = document.querySelectorAll(tag);
         elements.forEach(el => {
-          if (el.offsetParent !== null && !el.closest(`#${EXTENSION_UI_ID}`)) {
-            const elementText = (el.innerText || el.textContent || '').trim();
-            if (elementText.length > 0) {
-              alternatives.push({
-                tag: el.tagName.toLowerCase(),
-                class: el.className || '',
-                text: elementText.substring(0, 50),
-                selector: getSelector(el)
-              });
+          try {
+            if (el && el.offsetParent !== null && !el.closest(`#${EXTENSION_UI_ID}`)) {
+              const elementText = (el.innerText || el.textContent || '').trim();
+              if (elementText.length > 0) {
+                // 안전한 className 처리
+                let safeClassName = '';
+                try {
+                  if (el.className) {
+                    if (typeof el.className === 'string') {
+                      safeClassName = el.className;
+                    } else if (el.className.toString) {
+                      safeClassName = el.className.toString();
+                    }
+                  }
+                } catch (e) {
+                  safeClassName = '';
+                }
+                
+                alternatives.push({
+                  tag: el.tagName.toLowerCase(),
+                  class: safeClassName,
+                  text: elementText.substring(0, 50),
+                  selector: getSelector(el)
+                });
+              }
             }
+          } catch (e) {
+            console.log(`⚠️ 대안 요소 처리 오류: ${e.message}`);
           }
         });
       }
@@ -1277,17 +1892,35 @@ if (!window.mcpAgentInjected) {
       if (text) {
         const allElements = document.querySelectorAll('a, button, li, div, span');
         allElements.forEach(el => {
-          if (el.offsetParent !== null && !el.closest(`#${EXTENSION_UI_ID}`)) {
-            const elementText = (el.innerText || el.textContent || '').toLowerCase();
-            const searchText = text.toLowerCase();
-            if (elementText.includes(searchText)) {
-              alternatives.push({
-                tag: el.tagName.toLowerCase(),
-                class: el.className || '',
-                text: (el.innerText || el.textContent || '').substring(0, 50),
-                selector: getSelector(el)
-              });
+          try {
+            if (el && el.offsetParent !== null && !el.closest(`#${EXTENSION_UI_ID}`)) {
+              const elementText = (el.innerText || el.textContent || '').toLowerCase();
+              const searchText = text.toLowerCase();
+              if (elementText.includes(searchText)) {
+                // 안전한 className 처리
+                let safeClassName = '';
+                try {
+                  if (el.className) {
+                    if (typeof el.className === 'string') {
+                      safeClassName = el.className;
+                    } else if (el.className.toString) {
+                      safeClassName = el.className.toString();
+                    }
+                  }
+                } catch (e) {
+                  safeClassName = '';
+                }
+                
+                alternatives.push({
+                  tag: el.tagName.toLowerCase(),
+                  class: safeClassName,
+                  text: (el.innerText || el.textContent || '').substring(0, 50),
+                  selector: getSelector(el)
+                });
+              }
             }
+          } catch (e) {
+            console.log(`⚠️ 텍스트 기반 검색 오류: ${e.message}`);
           }
         });
       }
@@ -1295,16 +1928,34 @@ if (!window.mcpAgentInjected) {
       // 3. 클릭 가능한 요소들 찾기
       const clickableElements = document.querySelectorAll('a, button, [role="button"], [onclick]');
       clickableElements.forEach(el => {
-        if (el.offsetParent !== null && !el.closest(`#${EXTENSION_UI_ID}`)) {
-          const elementText = (el.innerText || el.textContent || '').trim();
-          if (elementText.length > 0) {
-            alternatives.push({
-              tag: el.tagName.toLowerCase(),
-              class: el.className || '',
-              text: elementText.substring(0, 50),
-              selector: getSelector(el)
-            });
+        try {
+          if (el && el.offsetParent !== null && !el.closest(`#${EXTENSION_UI_ID}`)) {
+            const elementText = (el.innerText || el.textContent || '').trim();
+            if (elementText.length > 0) {
+              // 안전한 className 처리
+              let safeClassName = '';
+              try {
+                if (el.className) {
+                  if (typeof el.className === 'string') {
+                    safeClassName = el.className;
+                  } else if (el.className.toString) {
+                    safeClassName = el.className.toString();
+                  }
+                }
+              } catch (e) {
+                safeClassName = '';
+              }
+              
+              alternatives.push({
+                tag: el.tagName.toLowerCase(),
+                class: safeClassName,
+                text: elementText.substring(0, 50),
+                selector: getSelector(el)
+              });
+            }
           }
+        } catch (e) {
+          console.log(`⚠️ 클릭 가능 요소 검색 오류: ${e.message}`);
         }
       });
       
@@ -1317,14 +1968,74 @@ if (!window.mcpAgentInjected) {
     const seen = new Set();
     
     alternatives.forEach(alt => {
-      const key = `${alt.tag}-${alt.text}`;
-      if (!seen.has(key)) {
-        seen.add(key);
-        uniqueAlternatives.push(alt);
+      try {
+        const key = `${alt.tag}-${alt.text}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          uniqueAlternatives.push(alt);
+        }
+      } catch (e) {
+        console.log(`⚠️ 중복 제거 오류: ${e.message}`);
       }
     });
     
     return uniqueAlternatives.slice(0, 5); // 최대 5개 반환
+  }
+  
+  function findSubmitButton(inputElement) {
+    // 1. 같은 폼 내에서 submit 버튼 찾기
+    const form = inputElement.closest('form');
+    if (form) {
+      const submitInForm = form.querySelector('input[type="submit"], button[type="submit"], button:not([type])');
+      if (submitInForm && submitInForm.offsetParent !== null) {
+        return submitInForm;
+      }
+    }
+    
+    // 2. 입력 필드 근처의 버튼 찾기 (같은 부모 컨테이너)
+    const container = inputElement.closest('div, section, fieldset') || inputElement.parentElement;
+    if (container) {
+      const nearbyButtons = container.querySelectorAll('button, input[type="submit"]');
+      for (const btn of nearbyButtons) {
+        if (btn.offsetParent !== null && !btn.closest(`#${EXTENSION_UI_ID}`)) {
+          const btnText = btn.textContent.toLowerCase() || btn.value?.toLowerCase() || '';
+          // 전송/검색/확인 관련 버튼 키워드
+          const submitKeywords = ['전송', '보내기', '검색', '확인', '등록', '제출', 'submit', 'send', 'search', 'go', 'enter'];
+          if (submitKeywords.some(keyword => btnText.includes(keyword))) {
+            return btn;
+          }
+        }
+      }
+      
+      // 키워드가 없어도 버튼이 하나뿐이면 해당 버튼 사용
+      const visibleButtons = Array.from(nearbyButtons).filter(btn => 
+        btn.offsetParent !== null && !btn.closest(`#${EXTENSION_UI_ID}`)
+      );
+      if (visibleButtons.length === 1) {
+        return visibleButtons[0];
+      }
+    }
+    
+    // 3. 페이지 전체에서 검색 관련 버튼 찾기
+    const searchButtons = document.querySelectorAll('button, input[type="submit"]');
+    for (const btn of searchButtons) {
+      if (btn.offsetParent !== null && !btn.closest(`#${EXTENSION_UI_ID}`)) {
+        const btnText = btn.textContent.toLowerCase() || btn.value?.toLowerCase() || '';
+        if (btnText.includes('검색') || btnText.includes('search')) {
+          // 입력 필드와 가까운 거리에 있는지 확인
+          const inputRect = inputElement.getBoundingClientRect();
+          const btnRect = btn.getBoundingClientRect();
+          const distance = Math.sqrt(
+            Math.pow(inputRect.x - btnRect.x, 2) + Math.pow(inputRect.y - btnRect.y, 2)
+          );
+          if (distance < 300) { // 300px 이내
+            return btn;
+          }
+        }
+      }
+    }
+    
+    return null; // 전송 버튼을 찾지 못함
   }
 
   document.body.appendChild(ui);

@@ -129,13 +129,76 @@ def translate_requirement_to_web_guide(user_message: str, page_type: str = None)
 # 페이지 이해도 분석
 # ============================
 def analyze_page_understanding(dom_summary: list) -> dict:
-    """DOM 분석은 LLM에게 위임 - 기본 정보만 반환"""
-    logger.info("📊 페이지 기본 정보만 추출 (분석은 LLM이 담당)")
+    """DOM 분석은 LLM에게 위임 - 기본 정보 + 로그인 감지"""
+    logger.info("📊 페이지 기본 정보 추출 (분석은 LLM이 담당)")
+    
+    # 로그인 페이지 감지
+    is_login_page = detect_login_page(dom_summary)
     
     return {
         "dom_elements": len(dom_summary),
-        "analysis_method": "llm_delegation"
+        "analysis_method": "llm_delegation",
+        "is_login_page": is_login_page
     }
+
+def detect_login_page(dom_summary: list) -> bool:
+    """로그인 페이지 여부 감지 (로그인 성공 상황 고려)"""
+    
+    # 먼저 로그인 성공 신호 확인
+    success_indicators = ["메일함", "inbox", "받은편지함", "logout", "로그아웃", "내정보", "프로필"]
+    success_signals = 0
+    
+    for element in dom_summary:
+        text = (element.get("text", "") or "").lower()
+        for indicator in success_indicators:
+            if indicator in text:
+                success_signals += 1
+                break
+    
+    # 로그인 성공 신호가 충분하면 로그인 페이지 아님
+    if success_signals >= 1:
+        logger.info(f"✅ 로그인 성공 감지: 성공신호 {success_signals}개 발견")
+        return False
+    
+    # 기존 로그인 페이지 감지 로직
+    login_indicators = {
+        "text_keywords": ["로그인", "login", "sign in", "아이디", "비밀번호", "password", "이메일"],
+        "input_types": ["password", "email"],
+        "login_classes": ["login", "signin", "auth", "credential"]
+    }
+    
+    text_matches = 0
+    password_fields = 0
+    login_elements = 0
+    
+    for element in dom_summary:
+        # 텍스트 키워드 체크
+        text = (element.get("text", "") or "").lower()
+        for keyword in login_indicators["text_keywords"]:
+            if keyword in text:
+                text_matches += 1
+                break
+        
+        # 비밀번호 필드 체크
+        if element.get("type") == "password":
+            password_fields += 1
+        
+        # 로그인 관련 클래스/ID 체크
+        element_class = (element.get("class", "") or "").lower()
+        element_id = (element.get("id", "") or "").lower()
+        for login_class in login_indicators["login_classes"]:
+            if login_class in element_class or login_class in element_id:
+                login_elements += 1
+                break
+    
+    # 더 엄격한 로그인 페이지 판정 (성공 신호가 없는 경우에만)
+    is_login = (
+        password_fields > 0 and text_matches >= 1 and login_elements >= 1  # 모든 조건 만족 시에만
+    )
+    
+    logger.info(f"🔐 로그인 페이지 감지: {is_login} (성공신호: {success_signals}, 비밀번호필드: {password_fields}, 텍스트매칭: {text_matches}, 로그인요소: {login_elements})")
+    
+    return is_login
 
 # ============================
 # 목표 진행도 평가
@@ -390,6 +453,290 @@ def compress_dom(dom: list) -> list:
     return result  # 모든 요소 포함
 
 
+# ============================
+# DOM 청킹 시스템
+# ============================
+
+def chunk_dom(dom_summary: list, chunk_size: int = 1000) -> list:
+    """DOM을 지정된 크기로 청크 분할"""
+    chunks = []
+    for i in range(0, len(dom_summary), chunk_size):
+        chunk = dom_summary[i:i+chunk_size]
+        chunks.append(chunk)
+    
+    logger.info(f"📦 DOM 청킹: {len(dom_summary)}개 요소 → {len(chunks)}개 청크 (청크당 최대 {chunk_size}개)")
+    return chunks
+
+
+async def analyze_dom_chunks(goal: str, dom_summary: list, image_data: str, current_step: int, plan: list) -> dict:
+    """DOM 청크를 순차적으로 분석하여 최적 액션 찾기 (컨텍스트 유지)"""
+    
+    # DOM을 1000개씩 분할
+    chunks = chunk_dom(dom_summary, chunk_size=1000)
+    candidate_actions = []
+    accumulated_context = {
+        "page_structure": [],
+        "key_areas": [],
+        "interactive_elements": [],
+        "navigation_found": False,
+        "main_content_area": None,
+        "action_candidates_count": 0
+    }
+    
+    for i, chunk in enumerate(chunks):
+        logger.info(f"🔍 청크 {i+1}/{len(chunks)} 분석 중... ({len(chunk)}개 요소)")
+        
+        # 이전 컨텍스트를 포함한 청크별 실행 프롬프트 생성
+        prompt = build_chunk_execution_prompt_with_context(
+            goal, chunk, i+1, len(chunks), current_step, plan, accumulated_context
+        )
+        
+        try:
+            response = await call_llm_with_image(prompt, image_data)
+            action_json = extract_top_level_json(response)
+            
+            if action_json:
+                parsed_action = json.loads(action_json)
+                
+                # 컨텍스트 정보 업데이트
+                update_accumulated_context(accumulated_context, chunk, parsed_action, response)
+                
+                if parsed_action.get("action") not in ["none", "no_action"]:
+                    candidate_actions.append({
+                        "chunk_index": i,
+                        "action": parsed_action,
+                        "elements_count": len(chunk),
+                        "confidence": parsed_action.get("confidence", 0.5),
+                        "context_aware": True
+                    })
+                    accumulated_context["action_candidates_count"] += 1
+                    logger.info(f"✅ 청크 {i+1}에서 액션 발견: {parsed_action.get('action')} (신뢰도: {parsed_action.get('confidence', 'N/A')})")
+                else:
+                    logger.info(f"⏭️ 청크 {i+1}에서 적합한 액션 없음")
+        
+        except Exception as e:
+            logger.error(f"❌ 청크 {i+1} 분석 실패: {e}")
+            continue
+    
+    # 후보 액션들 중 최선 선택
+    if candidate_actions:
+        logger.info(f"🎯 총 {len(candidate_actions)}개 후보 액션 발견")
+        return select_best_action(candidate_actions, goal)
+    else:
+        logger.info("❌ 모든 청크에서 적합한 액션을 찾지 못함")
+        return {"action": "end", "reason": "No suitable action found in any DOM chunk"}
+
+
+def select_best_action(candidate_actions: list, goal: str) -> dict:
+    """여러 후보 액션 중 최선 선택"""
+    
+    if len(candidate_actions) == 1:
+        logger.info("🎯 단일 후보 액션 자동 선택")
+        return candidate_actions[0]["action"]
+    
+    # 신뢰도 기반 정렬
+    candidate_actions.sort(key=lambda x: x["action"].get("confidence", 0.5), reverse=True)
+    
+    # 가장 높은 신뢰도의 액션 선택
+    best_action = candidate_actions[0]["action"]
+    logger.info(f"🏆 최고 신뢰도 액션 선택: {best_action.get('action')} (신뢰도: {best_action.get('confidence', 'N/A')})")
+    
+    # 디버깅을 위해 모든 후보 로깅
+    for i, candidate in enumerate(candidate_actions):
+        action = candidate["action"]
+        logger.info(f"   후보 {i+1}: {action.get('action')} (신뢰도: {action.get('confidence', 'N/A')}) - {action.get('reason', 'No reason')}")
+    
+    return best_action
+
+
+def build_chunk_execution_prompt(goal: str, chunk: list, chunk_num: int, total_chunks: int, current_step: int, plan: list) -> str:
+    """청크별 실행 프롬프트 생성"""
+    
+    # 계획 정보
+    plan_context = ""
+    if plan and current_step < len(plan):
+        plan_context = f"\n현재 계획 단계: {plan[current_step].get('action', 'Unknown')}"
+    
+    prompt = f"""🧠 **DOM 청크 분석 및 액션 실행**
+
+**목표:** {goal}
+**분석 범위:** 청크 {chunk_num}/{total_chunks} ({len(chunk)}개 요소){plan_context}
+
+**이 청크의 DOM 요소들:**
+{json.dumps(chunk, ensure_ascii=False, indent=2)}
+
+**분석 지침:**
+1. 🎯 **목표 달성을 위한 최적 액션 찾기**
+2. 🔍 **이 청크 내에서만 액션 가능한 요소 탐색**
+3. 📊 **신뢰도 점수 부여 (0.0~1.0)**
+
+**액션 우선순위:**
+- 🎯 목표와 직접 관련된 버튼/링크 (높은 신뢰도)
+- 📧 이메일, 메일 관련 요소 (중간 신뢰도)
+- 🧭 내비게이션 요소 (낮은 신뢰도)
+
+**출력 형식:**
+적합한 액션이 있으면:
+{{"action":"click|fill|goto|google_search|hover|waitUntil", "selector":"<css>", 
+  "text":"<optional>", "value":"<optional>", "url":"<optional>", "timeout":1000,
+  "confidence": 0.8, "reason": "why this action is suitable"}}
+
+적합한 액션이 없으면:
+{{"action":"none", "reason": "no suitable element in this chunk"}}
+
+**Return ONLY the JSON, no other text:**"""
+    
+    return prompt
+
+
+def build_chunk_execution_prompt_with_context(goal: str, chunk: list, chunk_num: int, total_chunks: int, 
+                                              current_step: int, plan: list, accumulated_context: dict) -> str:
+    """컨텍스트를 포함한 청크별 실행 프롬프트 생성"""
+    
+    # 계획 정보
+    plan_context = ""
+    if plan and current_step < len(plan):
+        plan_context = f"\n현재 계획 단계: {plan[current_step].get('action', 'Unknown')}"
+    
+    # 누적 컨텍스트 요약
+    context_summary = build_context_summary(accumulated_context, chunk_num, total_chunks)
+    
+    prompt = f"""🧠 **DOM 청크 분석 및 액션 실행 (컨텍스트 포함)**
+
+**목표:** {goal}
+**분석 범위:** 청크 {chunk_num}/{total_chunks} ({len(chunk)}개 요소){plan_context}
+
+{context_summary}
+
+**현재 청크의 DOM 요소들:**
+{json.dumps(chunk, ensure_ascii=False, indent=2)}
+
+**분석 지침:**
+1. 🧠 **이전 분석 결과를 고려하여** 목표 달성을 위한 최적 액션 찾기
+2. 🔍 **이 청크 내에서만 액션 가능한 요소 탐색**
+3. 📊 **신뢰도 점수 부여 (0.0~1.0)**
+4. 🔗 **이전 청크에서 발견된 정보와의 연관성 고려**
+
+**액션 우선순위 (컨텍스트 기반):**
+- 🎯 목표와 직접 관련되고 이전 맥락과 일치하는 요소 (최고 신뢰도)
+- 📧 이전 청크에서 확인된 패턴과 일치하는 요소 (높은 신뢰도)
+- 🧭 새로 발견된 내비게이션/기능 요소 (중간 신뢰도)
+
+**출력 형식:**
+적합한 액션이 있으면:
+{{"action":"click|fill|goto|google_search|hover|waitUntil", "selector":"<css>", 
+  "text":"<optional>", "value":"<optional>", "url":"<optional>", "timeout":1000,
+  "confidence": 0.8, "reason": "why this action is suitable with context"}}
+
+적합한 액션이 없으면:
+{{"action":"none", "reason": "no suitable element in this chunk"}}
+
+**Return ONLY the JSON, no other text:**"""
+    
+    return prompt
+
+
+def build_context_summary(accumulated_context: dict, current_chunk: int, total_chunks: int) -> str:
+    """누적 컨텍스트를 요약한 텍스트 생성"""
+    
+    if current_chunk == 1:
+        return "**컨텍스트:** 첫 번째 청크 - 페이지 구조 파악 시작"
+    
+    summary_parts = []
+    
+    # 페이지 구조 정보
+    if accumulated_context["page_structure"]:
+        structures = ", ".join(accumulated_context["page_structure"][-3:])  # 최근 3개만
+        summary_parts.append(f"📋 **발견된 페이지 구조:** {structures}")
+    
+    # 주요 영역 정보
+    if accumulated_context["key_areas"]:
+        areas = ", ".join(accumulated_context["key_areas"][-3:])  # 최근 3개만
+        summary_parts.append(f"🗺️ **주요 영역:** {areas}")
+    
+    # 인터랙티브 요소
+    if accumulated_context["interactive_elements"]:
+        elements = ", ".join(accumulated_context["interactive_elements"][-3:])  # 최근 3개만
+        summary_parts.append(f"🔘 **발견된 인터랙티브 요소:** {elements}")
+    
+    # 내비게이션 발견 여부
+    if accumulated_context["navigation_found"]:
+        summary_parts.append("🧭 **내비게이션 구조 확인됨**")
+    
+    # 메인 콘텐츠 영역
+    if accumulated_context["main_content_area"]:
+        summary_parts.append(f"📄 **메인 콘텐츠 영역:** {accumulated_context['main_content_area']}")
+    
+    # 액션 후보 개수
+    if accumulated_context["action_candidates_count"] > 0:
+        summary_parts.append(f"🎯 **이전 액션 후보:** {accumulated_context['action_candidates_count']}개 발견")
+    
+    if not summary_parts:
+        return f"**컨텍스트:** 청크 {current_chunk-1}개 분석 완료 - 특별한 발견사항 없음"
+    
+    return "**🧠 이전 청크 분석 결과:**\n" + "\n".join(f"   - {part}" for part in summary_parts)
+
+
+def update_accumulated_context(context: dict, chunk: list, parsed_action: dict, response: str):
+    """청크 분석 결과를 누적 컨텍스트에 업데이트"""
+    
+    # 페이지 구조 요소 탐지
+    structural_elements = []
+    for element in chunk:
+        tag = element.get("tag", "").lower()
+        if tag in ["nav", "header", "main", "section", "aside", "footer"]:
+            structural_elements.append(tag)
+        elif "nav" in element.get("class", "").lower():
+            structural_elements.append("navigation")
+        elif "menu" in element.get("class", "").lower():
+            structural_elements.append("menu")
+    
+    if structural_elements:
+        context["page_structure"].extend(structural_elements)
+        context["page_structure"] = list(set(context["page_structure"]))  # 중복 제거
+    
+    # 주요 영역 탐지
+    key_areas = []
+    for element in chunk:
+        text = element.get("text", "").lower()
+        class_name = element.get("class", "").lower()
+        if any(keyword in text for keyword in ["메일", "mail", "inbox", "받은편지함"]):
+            key_areas.append("메일 영역")
+        elif any(keyword in class_name for keyword in ["content", "main", "list"]):
+            key_areas.append("콘텐츠 영역")
+        elif element.get("tag") == "form":
+            key_areas.append("폼 영역")
+    
+    if key_areas:
+        context["key_areas"].extend(key_areas)
+        context["key_areas"] = list(set(context["key_areas"]))  # 중복 제거
+    
+    # 인터랙티브 요소 탐지
+    interactive_types = []
+    for element in chunk:
+        tag = element.get("tag", "").lower()
+        if tag in ["button", "input", "a", "select", "textarea"]:
+            interactive_types.append(tag)
+    
+    if interactive_types:
+        context["interactive_elements"].extend(interactive_types)
+        context["interactive_elements"] = list(set(context["interactive_elements"]))  # 중복 제거
+    
+    # 내비게이션 발견
+    if any("nav" in element.get("tag", "").lower() or "nav" in element.get("class", "").lower() 
+           for element in chunk):
+        context["navigation_found"] = True
+    
+    # 메인 콘텐츠 영역 식별
+    for element in chunk:
+        if element.get("tag") == "main" or "main" in element.get("class", "").lower():
+            context["main_content_area"] = "main"
+            break
+        elif "content" in element.get("class", "").lower():
+            context["main_content_area"] = "content"
+            break
+
+
 def save_debug_image(image_data: str, step: int, goal: str | None = None) -> str | None:
     try:
         logger.info(f"💾 이미지 저장 시작 (스텝: {step}, 목표: {goal})")
@@ -491,6 +838,10 @@ Prefer concise imperative. If it's pure navigation, output only '<URL>로 이동
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
     logger.info("🔌 WebSocket 연결 수락됨 (Stateless 서버)")
+    
+    # 로그인 재시도 방지 플래그
+    login_skip_detection = False
+    
     try:
         while True:
             raw = await websocket.receive_text()
@@ -502,7 +853,23 @@ async def websocket_endpoint(websocket: WebSocket):
                 logger.error(f"❌ JSON 파싱 실패: {e}")
                 continue
 
-            # ---------- init ----------
+            # ---------- user_continue ----------  
+            if payload.get("type") == "user_continue":
+                logger.info("▶️ 사용자 진행 요청 - 자동화 재개")
+                login_skip_detection = True  # 로그인 감지 스킵 플래그 설정
+                await websocket.send_text(json.dumps({
+                    "type": "automation_resumed", 
+                    "message": "자동화가 재개됩니다.",
+                    "timestamp": datetime.now().isoformat()
+                }))
+                # DOM 재요청
+                await websocket.send_text(json.dumps({
+                    "type": "request_dom",
+                    "message": "로그인 완료 후 페이지 정보를 다시 분석합니다."
+                }))
+                continue
+
+                        # ---------- init ----------
             if payload.get("type") == "init":
                 try:
                     user_goal = payload["message"]
@@ -593,6 +960,20 @@ async def websocket_endpoint(websocket: WebSocket):
                     }
                     await websocket.send_text(json.dumps(analysis_result, ensure_ascii=False))
                     logger.info("📊 페이지 분석 결과 전송 완료")
+                    
+                    # 로그인 페이지 감지 시 대기 모드 (스킵 플래그 확인)
+                    if page_analysis.get("is_login_page") and not login_skip_detection:
+                        logger.info("🔐 로그인 페이지 감지 - 사용자 대기 모드 활성화")
+                        await websocket.send_text(json.dumps({
+                            "type": "login_detected",
+                            "message": "로그인이 필요합니다. 로그인을 완료한 후 '진행' 버튼을 눌러주세요.",
+                            "show_continue_button": True,
+                            "timestamp": datetime.now().isoformat()
+                        }))
+                        continue  # 자동화 일시 정지
+                    elif login_skip_detection:
+                        logger.info("🔓 로그인 감지 스킵 - 사용자가 진행 요청했음")
+                        login_skip_detection = False  # 플래그 리셋
                 except Exception as e:
                     logger.error(f"❌ DOM 압축 실패: {e}")
                     continue
@@ -621,27 +1002,65 @@ async def websocket_endpoint(websocket: WebSocket):
                 if is_eval:
                     prompt = build_evaluation_prompt_with_image(goal, dom_summary, context)
                     response = await (call_llm_with_image(prompt, image_data) if image_data else call_llm(prompt))
+                    
+                    if not response:
+                        await websocket.send_text(json.dumps({"type": "error", "detail": "LLM 응답 없음"}))
+                        continue
+
+                    logger.info(f"🧠 평가 LLM 응답: {response}")
+                    jtxt = extract_top_level_json(response)
+                    logger.info(f"🔍 추출된 JSON: {jtxt}")
+                    if not jtxt:
+                        logger.error(f"❌ JSON 추출 실패 - 원본: {response}")
+                        await websocket.send_text(json.dumps({"type": "error", "detail": f"JSON 파싱 실패: {response}"}))
+                        continue
+
+                    try:
+                        result = json.loads(jtxt)
+                    except json.JSONDecodeError as e:
+                        logger.error(f"❌ 오류: JSON 파싱 실패: {jtxt}")
+                        await websocket.send_text(json.dumps({"type": "error", "detail": f"JSON 파싱 실패: {jtxt}"}))
+                        continue
                 else:
-                    if image_data:
-                        prompt = build_execution_prompt_with_image(goal, plan, step, dom_summary, context) if plan else build_prompt_with_image(goal, dom_summary, step, context)
-                        response = await call_llm_with_image(prompt, image_data)
+                    # 실행 모드: DOM 크기에 따라 청킹 vs 일반 처리
+                    if len(dom_summary) > 1000:
+                        logger.info(f"🔄 대용량 DOM 감지 ({len(dom_summary)}개) - 청킹 모드 사용")
+                        try:
+                            result = await analyze_dom_chunks(goal, dom_summary, image_data, step, plan or [])
+                        except Exception as e:
+                            logger.error(f"❌ 청킹 분석 실패: {e}")
+                            await websocket.send_text(json.dumps({"type": "error", "detail": f"청킹 분석 실패: {e}"}))
+                            continue
                     else:
-                        prompt = f"Goal: {goal}\nStep: {step}\nDOM: {json.dumps(dom_summary, ensure_ascii=False, indent=2)}\nReturn next action as JSON."
-                        response = await call_llm(prompt)
+                        logger.info(f"📝 일반 DOM ({len(dom_summary)}개) - 단일 호출 모드")
+                        if image_data:
+                            prompt = build_execution_prompt_with_image(goal, plan, step, dom_summary, context) if plan else build_prompt_with_image(goal, dom_summary, step, context)
+                            response = await call_llm_with_image(prompt, image_data)
+                        else:
+                            prompt = f"Goal: {goal}\nStep: {step}\nDOM: {json.dumps(dom_summary, ensure_ascii=False, indent=2)}\nReturn next action as JSON."
+                            response = await call_llm(prompt)
 
-                if not response:
-                    await websocket.send_text(json.dumps({"type": "error", "detail": "LLM 응답 없음"}))
-                    continue
+                        if not response:
+                            await websocket.send_text(json.dumps({"type": "error", "detail": "LLM 응답 없음"}))
+                            continue
 
-                logger.info(f"🧠 LLM 전체 응답: {response}")
-                jtxt = extract_top_level_json(response)
-                logger.info(f"🔍 추출된 JSON: {jtxt}")
-                if not jtxt:
-                    logger.error(f"❌ JSON 추출 실패 - 원본: {response}")
-                    await websocket.send_text(json.dumps({"type": "error", "detail": f"JSON 파싱 실패: {response}"}))
-                    continue
+                        logger.info(f"🧠 LLM 전체 응답: {response}")
+                        jtxt = extract_top_level_json(response)
+                        logger.info(f"🔍 추출된 JSON: {jtxt}")
+                        if not jtxt:
+                            logger.error(f"❌ JSON 추출 실패 - 원본: {response}")
+                            await websocket.send_text(json.dumps({"type": "error", "detail": f"JSON 파싱 실패: {response}"}))
+                            continue
+                        
+                        try:
+                            result = json.loads(jtxt)
+                        except json.JSONDecodeError as e:
+                            logger.error(f"❌ 오류: JSON 파싱 실패: {jtxt}")
+                            await websocket.send_text(json.dumps({"type": "error", "detail": f"JSON 파싱 실패: {jtxt}"}))
+                            continue
+
+                # 공통 처리 로직 (청킹/일반 모드 모두 적용)
                 try:
-                    result = json.loads(jtxt)
                     if not is_eval:
                         # google_search → goto 변환
                         if result.get("action") == "google_search" and result.get("query") and not result.get("url"):

@@ -485,6 +485,16 @@ if (!window.mcpAgentInjected) {
       if (!message) return;
       input.value = '';
       
+      // 진행 명령어 특별 처리
+      if (message === "진행" || message === "continue") {
+        ws.send(JSON.stringify({
+          type: "user_continue", 
+          message: "진행"
+        }));
+        logMessage("▶️ 진행 명령 전송");
+        return;
+      }
+      
       // 컨텍스트에 새로운 목표 설정
       console.log("🎯 [Enter] 목표 설정 시도:", message);
       await context.setGoal(message);
@@ -673,6 +683,13 @@ if (!window.mcpAgentInjected) {
     } else if (data.type === "clear_confirmed") {
       // 서버 컨텍스트 초기화 확인
       logMessage(`✅ ${data.message}`);
+    } else if (data.type === "login_detected") {
+      // 로그인 감지 시 대기 UI 표시
+      showLoginWaitingMode(data.message);
+    } else if (data.type === "automation_resumed") {
+      // 자동화 재개 시 대기 UI 제거
+      hideLoginWaitingMode();
+      logMessage(`🔄 ${data.message}`);
     } else if (data.type === "resume_confirmed") {
       // 작업 재개 확인
       logMessage(`🔄 ${data.message}`);
@@ -2047,4 +2064,44 @@ if (!window.mcpAgentInjected) {
       showCurrentStatus();
     }
   }, 100);
+
+
+  // === 로그인 대기 UI 함수들 ===
+  function showLoginWaitingMode(message) {
+    logMessage(`🔐 ${message}`);
+    
+    // 진행 버튼 생성
+    const continueBtn = document.createElement("button");
+    continueBtn.textContent = "진행";
+    continueBtn.id = "continue-btn";
+    continueBtn.style.cssText = `
+        background: #28a745; color: white; border: none; 
+        padding: 10px 20px; margin: 10px; 
+        border-radius: 5px; cursor: pointer;
+        font-size: 14px; font-weight: bold;
+    `;
+    
+    continueBtn.onclick = () => {
+        // 진행 메시지 전송
+        ws.send(JSON.stringify({
+            type: "user_continue",
+            message: "진행"
+        }));
+        logMessage("▶️ 로그인 완료 - 자동화 재개 요청");
+    };
+    
+    // UI에 버튼 추가
+    const ui = document.getElementById(EXTENSION_UI_ID);
+    if (ui) {
+        ui.appendChild(continueBtn);
+    }
+  }
+
+  function hideLoginWaitingMode() {
+    const continueBtn = document.getElementById("continue-btn");
+    if (continueBtn) {
+        continueBtn.remove();
+    }
+  }
+
 }

@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 from openai import AzureOpenAI
 from starlette.websockets import WebSocketDisconnect
-import os, json, re, logging, base64
+import os, json, re, logging, base64, random
 from datetime import datetime
 import asyncio
 from urllib.parse import quote
@@ -236,50 +236,72 @@ def analyze_prompt_needs_dom(user_message: str) -> bool:
     return True
 
 # ============================
-# LLM helpers
+# LLM helpers (rate-limit aware)
 # ============================
-async def call_llm(prompt: str):
-    try:
-        client = AzureOpenAI(
-            api_key=os.getenv("AZURE_OPENAI_API_KEY"),
-            api_version="2024-02-15-preview",
-            azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
-        )
-        res = client.chat.completions.create(
-            model=os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME", "gpt-4.1-mini"),
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=500,
-            temperature=0.1,
-        )
-        return res.choices[0].message.content
-    except Exception as e:
-        logger.error(f"LLM 호출 실패: {e}")
+LLM_SEMAPHORE = asyncio.Semaphore(1)
+
+async def call_llm(prompt: str, max_tokens: int = 400):
+    async with LLM_SEMAPHORE:
+        for attempt in range(5):
+            try:
+                client = AzureOpenAI(
+                    api_key=os.getenv("AZURE_OPENAI_API_KEY"),
+                    api_version="2024-02-15-preview",
+                    azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
+                )
+                res = client.chat.completions.create(
+                    model=os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME", "gpt-4.1-mini"),
+                    messages=[{"role": "user", "content": prompt}],
+                    max_tokens=max_tokens,
+                    temperature=0.1,
+                )
+                return res.choices[0].message.content
+            except Exception as e:
+                message = str(e)
+                if "429" in message or "Too Many Requests" in message:
+                    backoff = min(20, (2 ** attempt)) + random.uniform(0, 0.5)
+                    logger.info(f"⏳ 429 감지 - {backoff:.1f}s 대기 후 재시도 ({attempt+1}/5)")
+                    await asyncio.sleep(backoff)
+                    continue
+                logger.error(f"LLM 호출 실패: {e}")
+                return None
+        logger.error("LLM 호출 실패: 재시도 한도 초과")
         return None
 
-async def call_llm_with_image(prompt: str, image_data: str):
-    try:
-        client = AzureOpenAI(
-            api_key=os.getenv("AZURE_OPENAI_API_KEY"),
-            api_version="2024-02-15-preview",
-            azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
-        )
-        if image_data.startswith('data:image'):
-            image_data = image_data.split(',')[1]
-        res = client.chat.completions.create(
-            model=os.getenv("AZURE_OPENAI_VISION_DEPLOYMENT_NAME", "gpt-4.1-mini"),
-            messages=[{
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": prompt},
-                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{image_data}"}},
-                ],
-            }],
-            max_tokens=500,
-            temperature=0.1,
-        )
-        return res.choices[0].message.content
-    except Exception as e:
-        logger.error(f"Vision API 호출 실패: {e}")
+async def call_llm_with_image(prompt: str, image_data: str, max_tokens: int = 400):
+    async with LLM_SEMAPHORE:
+        for attempt in range(5):
+            try:
+                client = AzureOpenAI(
+                    api_key=os.getenv("AZURE_OPENAI_API_KEY"),
+                    api_version="2024-02-15-preview",
+                    azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
+                )
+                if image_data.startswith('data:image'):
+                    image_data = image_data.split(',')[1]
+                res = client.chat.completions.create(
+                    model=os.getenv("AZURE_OPENAI_VISION_DEPLOYMENT_NAME", "gpt-4.1-mini"),
+                    messages=[{
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": prompt},
+                            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{image_data}"}},
+                        ],
+                    }],
+                    max_tokens=max_tokens,
+                    temperature=0.1,
+                )
+                return res.choices[0].message.content
+            except Exception as e:
+                message = str(e)
+                if "429" in message or "Too Many Requests" in message:
+                    backoff = min(20, (2 ** attempt)) + random.uniform(0, 0.5)
+                    logger.info(f"⏳ 429 감지 - {backoff:.1f}s 대기 후 재시도 ({attempt+1}/5)")
+                    await asyncio.sleep(backoff)
+                    continue
+                logger.error(f"Vision API 호출 실패: {e}")
+                return None
+        logger.error("Vision API 호출 실패: 재시도 한도 초과")
         return None
 
 # ============================

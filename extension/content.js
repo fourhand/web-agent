@@ -332,27 +332,37 @@ if (!window.mcpAgentInjected) {
     lastDomSnapshot = context.lastDomSnapshot;
   }
 
-  const ws = new WebSocket("ws://localhost:8000/ws");
-  console.log("🔌 WebSocket connecting...");
+  let ws = null;
   
-  // WebSocket 연결 상태 사이드패널에 알림
-  ws.onopen = () => {
+  function handleWsOpen() {
     console.log("✅ WebSocket 연결됨");
-    logMessage("🔌 서버 연결 성공");
+    // UI 로그는 UI 생성 이후에만 수행 (초기 로딩 시 TDZ 회피)
+    try { typeof log !== 'undefined' && log && logMessage && logMessage("🔌 서버 연결 성공"); } catch (e) {}
     chrome.runtime.sendMessage({type: 'connection_status', connected: true});
-  };
+  }
   
-  ws.onclose = () => {
+  function handleWsClose() {
     console.log("❌ WebSocket 연결 끊김");
-    logMessage("🔌 서버 연결 끊김");
+    try { typeof log !== 'undefined' && log && logMessage && logMessage("🔌 서버 연결 끊김"); } catch (e) {}
     chrome.runtime.sendMessage({type: 'connection_status', connected: false});
-  };
+  }
   
-  ws.onerror = (error) => {
+  function handleWsError(error) {
     console.error("❌ WebSocket 오류:", error);
-    logMessage("🔌 서버 연결 오류");
+    try { typeof log !== 'undefined' && log && logMessage && logMessage("🔌 서버 연결 오류"); } catch (e) {}
     chrome.runtime.sendMessage({type: 'connection_status', connected: false});
-  };
+  }
+  
+  function initWebSocket() {
+    ws = new WebSocket("ws://localhost:8000/ws");
+    console.log("🔌 WebSocket connecting...");
+    ws.onopen = handleWsOpen;
+    ws.onclose = handleWsClose;
+    ws.onerror = handleWsError;
+    // onmessage 핸들러는 선언 이후에 바인딩 (초기화 시에는 바인딩하지 않음)
+  }
+  
+  initWebSocket();
   
   // 페이지 로드 시 컨텍스트 복원 및 평가 처리
   (async () => {
@@ -571,6 +581,10 @@ if (!window.mcpAgentInjected) {
   // === WebSocket 연결 ===
   const waitUntilReady = () =>
     new Promise(resolve => {
+      if (!ws || ws.readyState === 2 || ws.readyState === 3) {
+        console.log("🔁 WebSocket 재연결 시도 (state:", ws ? ws.readyState : 'none', ")");
+        initWebSocket();
+      }
       console.log("🔍 WebSocket readyState:", ws.readyState);
       if (ws.readyState === 1) {
         console.log("✅ WebSocket 이미 연결됨");
@@ -609,7 +623,7 @@ if (!window.mcpAgentInjected) {
       });
     });
 
-  ws.onmessage = async (event) => {
+  const handleWsMessage = async (event) => {
     console.log("📩 WebSocket 원본 데이터:", event.data);
     const data = JSON.parse(event.data);
     console.log("📩 WebSocket 파싱된 데이터:", data);
@@ -746,6 +760,10 @@ if (!window.mcpAgentInjected) {
       logMessage(`❌ 오류: ${data.detail}`);
     }
   };
+  // 현재 ws 인스턴스에 핸들러 바인딩 (초기 1회 보장)
+  if (ws) {
+    ws.onmessage = handleWsMessage;
+  }
 
   // === 화면 캡처 기능 ===
   async function captureScreen() {
@@ -944,6 +962,9 @@ if (!window.mcpAgentInjected) {
       image = await captureScreen();
     }
     
+    // WebSocket 보장
+    await waitUntilReady();
+    
     const payload = {
       type: "question",
       message: goal,
@@ -983,6 +1004,9 @@ if (!window.mcpAgentInjected) {
       image = await captureScreen();
     }
     
+    // WebSocket 보장
+    await waitUntilReady();
+
     // 컨텍스트 업데이트
     context.lastDomSnapshot = snapshotDom();
     
@@ -1020,7 +1044,9 @@ if (!window.mcpAgentInjected) {
       return;
     }
     
-    console.log("✅ WebSocket 이미 연결됨 (일반 모드) - readyState:", ws.readyState);
+    // WebSocket 보장
+    await waitUntilReady();
+    console.log("✅ WebSocket 연결 확인 (일반 모드) - readyState:", ws.readyState);
     
     const dom = summarizeDom();
     
@@ -1075,10 +1101,16 @@ if (!window.mcpAgentInjected) {
     
     // 페이지 이해도 표시 (3영역 구조)
     if (page_understanding) {
-      const { page_type, understanding_level, layout_confidence, menu_area, function_area, content_area, item_structure, clickable_items, visual_patterns } = page_understanding;
+      const { page_type, understanding_level, layout_confidence, menu_area, function_area, content_area, item_structure, clickable_items, visual_patterns, dom_elements, analysis_method, is_login_page } = page_understanding;
       
       logMessage(`📄 페이지 구조 분석:`, "PAGE_ANALYSIS");
-      logMessage(`  • 타입: ${page_type} | 이해도: ${understanding_level} | 레이아웃: ${layout_confidence}`, "PAGE_ANALYSIS");
+      const hasLegacy = page_type || understanding_level || layout_confidence;
+      if (hasLegacy) {
+        logMessage(`  • 타입: ${page_type} | 이해도: ${understanding_level} | 레이아웃: ${layout_confidence}`, "PAGE_ANALYSIS");
+      } else {
+        const loginInfo = typeof is_login_page === 'boolean' ? (is_login_page ? '로그인 필요' : '로그인 상태') : '알수없음';
+        logMessage(`  • 요소: ${dom_elements ?? '알수없음'}개 | 분석: ${analysis_method ?? 'llm_delegation'} | 상태: ${loginInfo}`, "PAGE_ANALYSIS");
+      }
       
       // 항목 구조 타입 표시
       if (item_structure && item_structure !== 'unknown') {
@@ -1302,78 +1334,132 @@ if (!window.mcpAgentInjected) {
 
   function summarizeDom() {
     try {
-      // 단계적 요소 수집 - 먼저 기본 요소들부터
-      const basicElements = Array.from(document.querySelectorAll('button, input, a, textarea, select, li, div, span'));
-      console.log(`🔍 기본 요소 수집: ${basicElements.length}개`);
-      
-      // 추가 요소들 수집 시도
-      const additionalElements = [];
-      try {
-        additionalElements.push(...Array.from(document.querySelectorAll('form, label, ul, ol, table, nav, header, main, section')));
-        console.log(`🔍 추가 요소 수집: ${additionalElements.length}개`);
-      } catch (e) {
-        console.log(`⚠️ 추가 요소 수집 실패: ${e.message}`);
-      }
-      
-      // 전체 요소 목록 결합
-      const allElements = [...basicElements, ...additionalElements];
-      console.log(`🔍 전체 요소 수집: ${allElements.length}개`);
-      
-      // 객체 필터링 없이 모든 요소 포함 (확장 프로그램 UI만 제외)
-      return allElements
-        .filter(el => {
-          try {
-            if (!el) return false;
-            // 확장 프로그램 UI만 제외
-            return !el.closest(`#${EXTENSION_UI_ID}`);
-          } catch (e) {
-            return true; // 오류 발생시 포함
-          }
-        })
-        .map(el => {
-          try {
-            // 안전한 className 처리
-            let safeClassName = '';
-            if (el.className) {
-              if (typeof el.className === 'string') {
-                safeClassName = el.className;
-              } else if (el.className.toString) {
-                safeClassName = el.className.toString();
-              }
+      // 도우미들
+      const normalize = (s) => (s || '').replace(/\s+/g, ' ').trim();
+      const isSameOriginHref = (href) => {
+        try {
+          const u = new URL(href, location.href);
+          return u.origin === location.origin;
+        } catch { return false; }
+      };
+      const safeClassNameOf = (el) => {
+        try {
+          if (!el.className) return '';
+          return typeof el.className === 'string' ? el.className : el.className.toString();
+        } catch { return ''; }
+      };
+      const isNoiseElement = (el) => {
+        const tag = (el.tagName || '').toLowerCase();
+        if (['script', 'style', 'noscript', 'template'].includes(tag)) return true;
+        const cls = (safeClassNameOf(el) || '').toLowerCase();
+        const id = (el.id || '').toLowerCase();
+        const attrHit = (name) => (el.getAttribute && el.getAttribute(name)) ? String(el.getAttribute(name)).toLowerCase() : '';
+        const patterns = ['ad', 'ads', 'advert', 'banner', 'promo', 'promotion', 'sponsored', 'tracking', 'track', 'beacon', 'pixel', 'outbrain', 'taboola', 'gtm', 'ga-'];
+        const hay = `${cls} ${id} ${attrHit('data-ad')} ${attrHit('data-ads')} ${attrHit('data-gtm')} ${attrHit('data-ga')} ${attrHit('data-track')} ${attrHit('data-trk')}`;
+        return patterns.some(p => hay.includes(p));
+      };
+      const isVisible = (el) => {
+        try {
+          if (el.getAttribute && el.getAttribute('aria-hidden') === 'true') return false;
+          const style = window.getComputedStyle(el);
+          if (!style || style.display === 'none' || style.visibility === 'hidden' || parseFloat(style.opacity || '1') === 0) return false;
+          if (el.offsetParent === null && style.position !== 'fixed') return false;
+          const rect = el.getBoundingClientRect();
+          const inViewport = rect && rect.width > 0 && rect.height > 0 && rect.bottom > 0 && rect.right > 0 && rect.top < (window.innerHeight || 0) && rect.left < (window.innerWidth || 0);
+          return inViewport;
+        } catch { return true; }
+      };
+      const isInteractive = (el) => {
+        const tag = (el.tagName || '').toLowerCase();
+        if (['a', 'button', 'input', 'select', 'textarea'].includes(tag)) return true;
+        const role = (el.getAttribute && el.getAttribute('role')) || '';
+        return ['button', 'link'].includes((role || '').toLowerCase()) || !!el.onclick;
+      };
+      const isSemanticKeep = (el) => {
+        const tag = (el.tagName || '').toLowerCase();
+        const keepTags = ['h1','h2','h3','section','article','main','nav','aside','p','li'];
+        return keepTags.includes(tag) || isInteractive(el);
+      };
+      const computeScore = (el, text) => {
+        const tag = (el.tagName || '').toLowerCase();
+        const children = (el.children && el.children.length) || 0;
+        const textDensity = (text.length || 0) / (children + 1);
+        const weights = { h1:3.0, h2:2.5, h3:2.0, main:2.0, article:2.0, section:1.8, nav:1.5, aside:1.3, p:1.2, li:1.1, a:1.8, button:1.8, input:1.5 };
+        const semantic = weights[tag] || 1.0;
+        const clickable = isInteractive(el) ? 1 : 0;
+        const rect = el.getBoundingClientRect ? el.getBoundingClientRect() : { width:0, height:0 };
+        const area = Math.max(1, rect.width * rect.height);
+        const areaFactor = Math.min(1.0, area / (window.innerWidth * window.innerHeight));
+        return Number((semantic * (1 + clickable * 0.2) + Math.min(1.0, textDensity / 200) + areaFactor * 0.2).toFixed(3));
+      };
+      const pickDataAttrs = (el) => {
+        const out = {};
+        const allow = ['data-testid','data-test','data-qa'];
+        for (const name of allow) {
+          const v = el.getAttribute && el.getAttribute(name);
+          if (v) out[name] = String(v);
+        }
+        return out;
+      };
+
+      // 수집 대상: 의미/인터랙션/구조 중심
+      const selector = [
+        'h1','h2','h3','section','article','main','nav','aside','p','li',
+        'a','button','input','select','textarea','form','label','header','footer'
+      ].join(',');
+      const candidates = Array.from(document.querySelectorAll(selector));
+      console.log(`🔍 후보 요소 수집: ${candidates.length}개`);
+
+      const results = [];
+      for (const el of candidates) {
+        try {
+          if (!el) continue;
+          if (el.closest && el.closest(`#${EXTENSION_UI_ID}`)) continue; // 확장 UI 제외
+          if (isNoiseElement(el)) continue; // 광고/스크립트 등 제외
+          if (!isVisible(el)) continue; // 비가시 제외
+          if (!isSemanticKeep(el)) continue; // 보존 기준 미충족 제외
+
+          const tag = (el.tagName || 'unknown').toLowerCase();
+          const selectorStr = getSelector(el);
+          const textRaw = el.innerText || el.placeholder || el.value || el.title || '';
+          const text = normalize(textRaw).slice(0, 500);
+
+          // 화이트리스트 속성
+          const item = { tag, selector: selectorStr };
+          if (text) item.text = text;
+          if (el.id) item.id = el.id;
+          const role = el.getAttribute && el.getAttribute('role');
+          if (role) item.role = role;
+          const aria = el.getAttribute && (el.getAttribute('aria-label') || el.getAttribute('aria-labelledby'));
+          if (aria) item['aria-label'] = aria;
+          if (el.type) item.type = el.type;
+          // value: 텍스트 입력만
+          if ((tag === 'input' || tag === 'textarea')) {
+            const t = (el.type || 'text').toLowerCase();
+            if (['text','search','email','tel','url','number','password'].includes(t)) {
+              if (el.value) item.value = String(el.value).slice(0, 200);
             }
-            
-            // 기본 정보만 수집 (속성 필터링)
-            const result = {
-              tag: el.tagName ? el.tagName.toLowerCase() : 'unknown',
-              selector: getSelector(el)
-            };
-            
-            // 텍스트 정보 (있을 때만)
-            const text = el.innerText || el.placeholder || el.value || el.title || '';
-            if (text.trim()) result.text = text.trim();
-            
-            // 주요 속성들 (값이 있을 때만 포함)
-            if (el.id) result.id = el.id;
-            if (el.name) result.name = el.name;
-            if (el.type) result.type = el.type;
-            if (safeClassName) result.class = safeClassName;
-            if (el.href) result.href = el.href;
-            if (el.value) result.value = el.value;
-            
-            return result;
-          } catch (e) {
-            console.log(`⚠️ DOM 요소 처리 오류: ${e.message}`);
-            return {
-              tag: 'unknown',
-              text: '',
-              id: '',
-              name: '',
-              type: '',
-              class: '',
-              selector: 'unknown'
-            };
           }
-        });
+          // href: 동일 출처만
+          if (tag === 'a' && el.href && isSameOriginHref(el.href)) {
+            item.href = el.href;
+          }
+          // data-* 일부
+          Object.assign(item, pickDataAttrs(el));
+
+          // 스코어링 (선택)
+          item.clickable = isInteractive(el);
+          item.inViewport = true;
+          item.score = computeScore(el, item.text || '');
+
+          results.push(item);
+        } catch (e) {
+          console.log(`⚠️ DOM 요소 처리 오류: ${e.message}`);
+        }
+      }
+
+      console.log(`📊 필터링 후 DOM: ${results.length}개`);
+      return results;
     } catch (error) {
       console.error('DOM 요약 오류:', error);
       return [];
@@ -1540,8 +1626,14 @@ if (!window.mcpAgentInjected) {
               } catch (clickError) {
                 console.error("클릭 이벤트 실행 오류:", clickError);
                 // 기본 클릭 시도
-                clickEl.click();
-                logMessage(`✅ 기본 클릭 성공: ${action.selector}${action.text ? ` (${action.text})` : ''}`);
+                try {
+                  clickEl.click();
+                  logMessage(`✅ 기본 클릭 성공: ${action.selector}${action.text ? ` (${action.text})` : ''}`);
+                } catch (e) {
+                  logMessage(`❌ 기본 클릭 실패: ${action.selector}`);
+                  // 서버에 실패 보고
+                  try { ws && ws.readyState === 1 && ws.send(JSON.stringify({ type: 'client_log', event_type: 'ACTION_FAILURE', message: 'click_failed', extra_data: { selector: action.selector, text: action.text } })); } catch (e2) {}
+                }
               }
             } else {
               console.log(`❌ [클릭 실패] 요소를 찾을 수 없음`);
@@ -1556,8 +1648,13 @@ if (!window.mcpAgentInjected) {
               if (retryEl) {
                 retryEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
                 await new Promise(resolve => setTimeout(resolve, 500));
-                retryEl.click();
-                logMessage(`✅ 재시도 클릭 성공: ${action.selector}${action.text ? ` (${action.text})` : ''}`);
+                try {
+                  retryEl.click();
+                  logMessage(`✅ 재시도 클릭 성공: ${action.selector}${action.text ? ` (${action.text})` : ''}`);
+                } catch (e) {
+                  logMessage(`❌ 재시도 클릭 실패: ${action.selector}`);
+                  try { ws && ws.readyState === 1 && ws.send(JSON.stringify({ type: 'client_log', event_type: 'ACTION_FAILURE', message: 'click_retry_failed', extra_data: { selector: action.selector, text: action.text } })); } catch (e2) {}
+                }
               } else {
                 // 대안 제시
                 const alternatives = findAlternativeElements(action.selector, action.text);
@@ -1573,12 +1670,18 @@ if (!window.mcpAgentInjected) {
                     if (altEl) {
                       altEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
                       await new Promise(resolve => setTimeout(resolve, 500));
-                      altEl.click();
-                      logMessage(`✅ 대안 요소 자동 클릭: ${alternatives[0].selector}`);
+                      try {
+                        altEl.click();
+                        logMessage(`✅ 대안 요소 자동 클릭: ${alternatives[0].selector}`);
+                      } catch (e) {
+                        logMessage(`❌ 대안 요소 클릭 실패: ${alternatives[0].selector}`);
+                        try { ws && ws.readyState === 1 && ws.send(JSON.stringify({ type: 'client_log', event_type: 'ACTION_FAILURE', message: 'click_alternative_failed', extra_data: { selector: alternatives[0].selector } })); } catch (e2) {}
+                      }
                     }
                   }
                 } else {
                   logMessage(`❌ 대안 요소도 찾을 수 없음`);
+                  try { ws && ws.readyState === 1 && ws.send(JSON.stringify({ type: 'client_log', event_type: 'ACTION_FAILURE', message: 'click_not_found', extra_data: { selector: action.selector, text: action.text } })); } catch (e2) {}
                 }
               }
             }

@@ -457,7 +457,7 @@ def compress_dom(dom: list) -> list:
 # DOM 청킹 시스템
 # ============================
 
-def chunk_dom(dom_summary: list, chunk_size: int = 1000) -> list:
+def chunk_dom(dom_summary: list, chunk_size: int = 300) -> list:
     """DOM을 지정된 크기로 청크 분할"""
     chunks = []
     for i in range(0, len(dom_summary), chunk_size):
@@ -471,8 +471,8 @@ def chunk_dom(dom_summary: list, chunk_size: int = 1000) -> list:
 async def analyze_dom_chunks(goal: str, dom_summary: list, image_data: str, current_step: int, plan: list) -> dict:
     """DOM 청크를 순차적으로 분석하여 최적 액션 찾기 (컨텍스트 유지)"""
     
-    # DOM을 1000개씩 분할
-    chunks = chunk_dom(dom_summary, chunk_size=1000)
+    # DOM을 300개씩 분할
+    chunks = chunk_dom(dom_summary, chunk_size=300)
     candidate_actions = []
     accumulated_context = {
         "page_structure": [],
@@ -492,6 +492,11 @@ async def analyze_dom_chunks(goal: str, dom_summary: list, image_data: str, curr
         )
         
         try:
+            # 청크 간 딜레이 추가 (429 에러 방지)
+            if i > 0:  # 첫 번째 청크가 아니면 딜레이
+                await asyncio.sleep(1.5)  # 1.5초 대기
+                logger.info(f"⏳ 청크 간 딜레이 (1.5초) - 429 에러 방지")
+            
             response = await call_llm_with_image(prompt, image_data)
             action_json = extract_top_level_json(response)
             
@@ -1023,7 +1028,7 @@ async def websocket_endpoint(websocket: WebSocket):
                         continue
                 else:
                     # 실행 모드: DOM 크기에 따라 청킹 vs 일반 처리
-                    if len(dom_summary) > 1000:
+                    if len(dom_summary) > 500:
                         logger.info(f"🔄 대용량 DOM 감지 ({len(dom_summary)}개) - 청킹 모드 사용")
                         try:
                             result = await analyze_dom_chunks(goal, dom_summary, image_data, step, plan or [])

@@ -4,6 +4,35 @@ if (!window.mcpAgentInjected) {
   const EXTENSION_UI_ID = "mcp-ui";
   const MAX_STEPS = 10;
   
+  // 와이어프레임 설정 관리
+  async function getWireframeSettings() {
+    return new Promise((resolve) => {
+      chrome.storage.sync.get(['wireframeEnabled'], (result) => {
+        resolve({
+          enabled: result.wireframeEnabled !== false // 기본값: true
+        });
+      });
+    });
+  }
+  
+  // 사이드패널로부터 메시지 수신
+  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (message.type === 'settings_changed') {
+      logMessage(`🔧 설정 변경: 와이어프레임 ${message.wireframeEnabled ? 'ON' : 'OFF'}`);
+    } else if (message.type === 'user_input') {
+      logMessage(`👤 사용자 입력: ${message.message}`);
+      
+      // 사용자 목표 설정 및 자동화 시작
+      if (message.message.trim()) {
+        context.setGoal(message.message.trim());
+        logMessage("🎯 목표 설정됨");
+        sendDomWithQuestion(message.message.trim());
+      }
+    }
+    
+    sendResponse({success: true});
+  });
+  
   // 통합된 Extension 컨텍스트 관리
   class ExtensionContext {
     constructor() {
@@ -305,6 +334,25 @@ if (!window.mcpAgentInjected) {
 
   const ws = new WebSocket("ws://localhost:8000/ws");
   console.log("🔌 WebSocket connecting...");
+  
+  // WebSocket 연결 상태 사이드패널에 알림
+  ws.onopen = () => {
+    console.log("✅ WebSocket 연결됨");
+    logMessage("🔌 서버 연결 성공");
+    chrome.runtime.sendMessage({type: 'connection_status', connected: true});
+  };
+  
+  ws.onclose = () => {
+    console.log("❌ WebSocket 연결 끊김");
+    logMessage("🔌 서버 연결 끊김");
+    chrome.runtime.sendMessage({type: 'connection_status', connected: false});
+  };
+  
+  ws.onerror = (error) => {
+    console.error("❌ WebSocket 오류:", error);
+    logMessage("🔌 서버 연결 오류");
+    chrome.runtime.sendMessage({type: 'connection_status', connected: false});
+  };
   
   // 페이지 로드 시 컨텍스트 복원 및 평가 처리
   (async () => {
@@ -887,16 +935,24 @@ if (!window.mcpAgentInjected) {
     }
     
     const dom = summarizeDom();
-    const image = await captureScreen();
+    
+    // 와이어프레임 설정 확인
+    const wireframeSettings = await getWireframeSettings();
+    let image = null;
+    
+    if (wireframeSettings.enabled) {
+      image = await captureScreen();
+    }
     
     const payload = {
       type: "question",
       message: goal,
       dom,
-      image: image
+      image: image,
+      wireframeEnabled: wireframeSettings.enabled
     };
     
-    logMessage("📤 질문 전송");
+    logMessage(`📤 질문 전송 ${wireframeSettings.enabled ? '(+이미지)' : '(텍스트만)'}`);
     ws.send(JSON.stringify(payload));
   }
 
@@ -918,18 +974,26 @@ if (!window.mcpAgentInjected) {
     console.log("📤 평가용 DOM 전송 시작 - readyState:", ws.readyState);
     
     const dom = summarizeDom();
-    const image = await captureScreen();
+    
+    // 와이어프레임 설정 확인
+    const wireframeSettings = await getWireframeSettings();
+    let image = null;
+    
+    if (wireframeSettings.enabled) {
+      image = await captureScreen();
+    }
     
     // 컨텍스트 업데이트
     context.lastDomSnapshot = snapshotDom();
     
     const payload = {
-      type: "dom_with_image_evaluation", // 평가 모드 표시
+      type: wireframeSettings.enabled ? "dom_with_image_evaluation" : "dom_evaluation",
       message: context.currentGoal,
       dom,
       image: image,
       context: context.getContextForServer(),
-      evaluationMode: true // 평가 모드 플래그
+      evaluationMode: true,
+      wireframeEnabled: wireframeSettings.enabled
     };
     
     logMessage(`📊 상황 평가 요청 (단계: ${context.step})`);
@@ -959,31 +1023,36 @@ if (!window.mcpAgentInjected) {
     console.log("✅ WebSocket 이미 연결됨 (일반 모드) - readyState:", ws.readyState);
     
     const dom = summarizeDom();
-    const image = await captureScreen();
     
-    // 이미지 캡처 결과 로깅
-    console.log("📸 이미지 캡처 결과:", {
-      imageExists: !!image,
-      imageType: typeof image,
-      imageLength: image ? image.length : 0,
-      imagePrefix: image ? image.substring(0, 50) : null
-    });
+    // 와이어프레임 설정 확인 후 이미지 캡처
+    const wireframeSettings = await getWireframeSettings();
+    let image = null;
+    
+    if (wireframeSettings.enabled) {
+      image = await captureScreen();
+      console.log("📸 와이어프레임 이미지 캡처:", {
+        imageExists: !!image,
+        imageLength: image ? image.length : 0
+      });
+    } else {
+      console.log("🎨 와이어프레임 비활성화 - 이미지 전송 건너뜀");
+    }
     
     // 컨텍스트 업데이트
     context.lastDomSnapshot = snapshotDom();
     
     const payload = {
-      type: "dom_with_image",
+      type: wireframeSettings.enabled ? "dom_with_image" : "dom_only",
       message: context.currentGoal,
       dom,
       image: image,
-      context: context.getContextForServer() // 전체 컨텍스트 포함
+      context: context.getContextForServer(),
+      wireframeEnabled: wireframeSettings.enabled
     };
     
-    logMessage(`📤 DOM + 이미지 전송 (단계: ${context.step})`);
+    logMessage(`📤 DOM ${wireframeSettings.enabled ? '+ 이미지' : '(텍스트만)'} 전송 (단계: ${context.step})`);
     console.log("📤 전송할 컨텍스트:", context.getContextForServer());
-    console.log("📤 이미지 데이터 존재:", !!payload.image);
-    console.log("📤 일반 DOM 전송:", payload.type);
+    console.log("📤 와이어프레임 모드:", wireframeSettings.enabled);
     ws.send(JSON.stringify(payload));
     
     await context.save();

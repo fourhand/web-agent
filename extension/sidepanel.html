@@ -5,13 +5,121 @@
   <title>MCP Side Panel</title>
   <style>
     body { font-family: sans-serif; margin: 0; padding: 0; width: 340px; background: rgba(255,255,255,0.95); color: #111; }
-    #log { height: 300px; overflow-y: auto; border-bottom: 1px solid #ccc; margin-bottom: 8px; }
-    #input { width: 100%; box-sizing: border-box; padding: 8px; }
+    
+    .header {
+      background: #f0f0f0;
+      padding: 10px;
+      border-bottom: 1px solid #ddd;
+    }
+    
+    .settings-section {
+      background: #f9f9f9;
+      padding: 8px;
+      margin-bottom: 8px;
+      border-radius: 4px;
+      border: 1px solid #e0e0e0;
+    }
+    
+    .setting-item {
+      display: flex;
+      align-items: center;
+      margin-bottom: 8px;
+    }
+    
+    .setting-item:last-child {
+      margin-bottom: 0;
+    }
+    
+    .setting-checkbox {
+      margin-right: 10px;
+      margin-top: 2px;
+      width: 16px;
+      height: 16px;
+      accent-color: #4CAF50;
+      cursor: pointer;
+    }
+    
+    .setting-label {
+      font-size: 13px;
+      color: #333;
+      flex: 1;
+    }
+    
+    .setting-description {
+      font-size: 11px;
+      color: #666;
+      margin-top: 2px;
+    }
+    
+    #log { 
+      height: 250px; 
+      overflow-y: auto; 
+      border: 1px solid #ddd; 
+      margin-bottom: 8px; 
+      padding: 8px;
+      background: white;
+      font-size: 12px;
+    }
+    
+    #input { 
+      width: 100%; 
+      box-sizing: border-box; 
+      padding: 8px; 
+      border: 1px solid #ddd;
+      border-radius: 4px;
+    }
+    
+    .status-indicator {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      margin-right: 6px;
+    }
+    
+    .status-connected { background-color: #4CAF50; }
+    .status-disconnected { background-color: #f44336; }
   </style>
 </head>
 <body>
-  <div id="log">MCP Side Panel 시작</div>
-  <input id="input" type="text" placeholder="명령을 입력하세요..." />
+  <div class="header">
+    <div style="font-weight: bold; margin-bottom: 4px;">🤖 Web Agent</div>
+    <div style="font-size: 11px; color: #666;">
+      <span id="connectionStatus" class="status-indicator status-disconnected"></span>
+      <span id="statusText">연결 중...</span>
+    </div>
+  </div>
+
+  <div class="settings-section">
+    <div style="font-weight: bold; margin-bottom: 8px; font-size: 12px;">⚙️ 설정</div>
+    
+    <!-- 테스트: 명시적 스타일 적용 -->
+    <div style="display: flex; align-items: center; margin-bottom: 8px; padding: 4px; background: #fff; border-radius: 4px;">
+      <input type="checkbox" id="wireframeToggle" checked style="width: 18px; height: 18px; margin-right: 10px; accent-color: #4CAF50;">
+      <label for="wireframeToggle" style="font-size: 13px; color: #333; cursor: pointer;">
+        🎨 와이어프레임 이미지 사용
+        <div style="font-size: 11px; color: #666; margin-top: 2px;">페이지 스크린샷을 LLM에게 전송하여 시각적 분석</div>
+      </label>
+    </div>
+    
+    <div style="display: flex; align-items: center; margin-bottom: 8px; padding: 4px; background: #fff; border-radius: 4px;">
+      <input type="checkbox" id="chunkingToggle" checked style="width: 18px; height: 18px; margin-right: 10px; accent-color: #4CAF50;">
+      <label for="chunkingToggle" style="font-size: 13px; color: #333; cursor: pointer;">
+        📦 DOM 청킹 사용
+        <div style="font-size: 11px; color: #666; margin-top: 2px;">대용량 DOM을 작은 단위로 나누어 분석</div>
+      </label>
+    </div>
+    
+    <!-- 디버깅용 버튼 -->
+    <button onclick="alert('버튼 테스트 성공!')" style="padding: 4px 8px; margin-top: 8px; background: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer;">
+      🧪 UI 테스트
+    </button>
+  </div>
+
+  <div id="log">🚀 Web Agent 시작됨</div>
+  
+  <input id="input" type="text" placeholder="목표를 입력하세요... (예: 네이버에서 최신 메일을 보여줘)" />
+  
   <script src="sidepanel.js"></script>
 </body>
 </html> 

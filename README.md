@@ -48,19 +48,29 @@ AI 기반의 지능형 브라우저 자동화 시스템으로, 시각적 인식�
 
 ## 🧠 **시스템 아키텍처**
 
+### **기존 시스템 vs LangGraph 시스템**
+
+| 구분 | 기존 시스템 | LangGraph 시스템 |
+|------|------------|------------------|
+| **플래닝** | 단순 프롬프트 기반 | 구조화된 워크플로우 |
+| **DOM 관리** | 청킹 기반 | VectorStore + 임베딩 |
+| **상태 관리** | 수동 컨텍스트 | 자동 체크포인트 |
+| **액션 실행** | 순차적 처리 | 조건부 라우팅 |
+| **오류 처리** | 기본 재시도 | 지능형 복구 |
+
 ### **1. 플래닝 (Planning)**
 
 #### **1.1 계획 수립 단계**
 - **목적**: 사용자 목표를 단계별 실행 계획으로 변환
 - **입력**: 목표 + DOM 요약 + 와이어프레임 이미지
 - **출력**: 3-8단계 JSON 배열 계획
-- **함수**: `build_planning_prompt_with_image()`
+- **함수**: `build_planning_prompt_with_image()` (기존) / `analyze_goal()` (LangGraph)
 
 #### **1.2 계획 실행 단계**
 - **목적**: 현재 단계의 계획된 액션 실행
 - **입력**: 계획 + 현재 단계 + DOM + 컨텍스트
 - **출력**: 다음 액션 JSON
-- **함수**: `build_execution_prompt_with_image()`
+- **함수**: `build_execution_prompt_with_image()` (기존) / `execute_action()` (LangGraph)
 
 ### **2. 돔분석 (DOM Analysis)**
 
@@ -74,18 +84,24 @@ AI 기반의 지능형 브라우저 자동화 시스템으로, 시각적 인식�
 - **분석**: 페이지 타입, 주요 요소, 상호작용 가능성
 - **함수**: `analyze_page_understanding()`
 
-#### **2.3 DOM 청킹 분석** ⭐
+#### **2.3 DOM 청킹 분석** ⭐ (기존 시스템)
 - **목적**: 대용량 DOM을 작은 청크로 분할 분석
 - **청크 크기**: 1000개 요소씩
 - **컨텍스트 유지**: 이전 청크 정보 누적
 - **조기 종료**: 신뢰도 ≥ 0.92 시 중단
 - **함수**: `analyze_dom_chunks()`, `chunk_dom()`
 
-#### **2.4 청크별 실행 프롬프트**
+#### **2.4 청크별 실행 프롬프트** (기존 시스템)
 - **목적**: 각 청크에서 최적 액션 찾기
 - **컨텍스트 포함**: 이전 분석 결과 활용
 - **신뢰도 점수**: 0.0~1.0 범위
 - **함수**: `build_chunk_execution_prompt_with_context()`
+
+#### **2.5 DOM VectorStore 관리** ⭐ (LangGraph 시스템)
+- **목적**: DOM 요소를 벡터 데이터베이스로 관리
+- **임베딩**: OpenAI Embeddings 사용
+- **검색**: 의미적 유사도 기반 요소 검색
+- **함수**: `create_dom_vectorstore()`, `search_dom_elements()`
 
 ### **3. 채팅분석 (Chat Analysis)**
 
@@ -174,12 +190,14 @@ AI 기반의 지능형 브라우저 자동화 시스템으로, 시각적 인식�
 ## 🏗️ **시스템 구조**
 
 ### **클라이언트 (Extension)**
-- **content.js**: DOM 캡처, UI 주입, WebSocket 통신
+- **content.js**: DOM 캡처, UI 주입, WebSocket 통신 (기존)
+- **content_langgraph.js**: LangGraph 기반 워크플로우 통신 (새로운)
 - **sidepanel.js**: 사용자 인터페이스, 설정 관리
 - **manifest.json**: 확장 프로그램 설정
 
 ### **서버 (FastAPI)**
-- **app.py**: 메인 서버 로직, WebSocket 엔드포인트
+- **app.py**: 메인 서버 로직, WebSocket 엔드포인트 (기존)
+- **app_langgraph.py**: LangGraph 기반 워크플로우 서버 (새로운)
 - **app_stateless.py**: 상태 없는 서버 버전
 - **prompts/**: LLM 프롬프트 템플릿
 
@@ -264,6 +282,8 @@ python app.py
 ## 🚀 **개발 및 배포**
 
 ### **로컬 개발**
+
+#### **기존 시스템 (app.py)**
 ```bash
 # 서버 실행
 cd server
@@ -272,6 +292,26 @@ uvicorn app:app --reload --port 8000
 
 # 확장 프로그램 로드
 # Chrome 확장 프로그램 관리 → 개발자 모드 → 압축해제된 확장 프로그램 로드
+```
+
+#### **LangGraph 시스템 (app_langgraph.py)** ⭐
+```bash
+# LangGraph 서버 실행
+cd server
+
+# 방법 1: pip로 모든 패키지 설치
+pip install -r requirements.txt
+pip install -r requirements_langgraph.txt
+
+# 방법 2: conda + pip 혼합 설치
+conda install fastapi uvicorn websockets python-dotenv requests beautifulsoup4 pillow
+pip install -r requirements_langgraph.txt
+
+# 서버 실행
+uvicorn app_langgraph:app --reload --port 8001
+
+# LangGraph 확장 프로그램 사용
+# content_langgraph.js를 content.js로 교체하여 사용
 ```
 
 ### **환경 변수**
@@ -546,7 +586,8 @@ AZURE_OPENAI_VISION_DEPLOYMENT_NAME=gpt-4.1-mini
 ```
 web-agent/
 ├── server/
-│   ├── app.py                 # 메인 서버 (상태 저장)
+│   ├── app.py                 # 메인 서버 (상태 저장) - 기존
+│   ├── app_langgraph.py       # LangGraph 워크플로우 서버 - 새로운
 │   ├── app_stateless.py       # Stateless 서버
 │   ├── debug_images/          # 와이어프레임 이미지 저장
 │   ├── prompts/              # LLM 프롬프트
@@ -555,7 +596,8 @@ web-agent/
 │   ├── manifest.json
 │   ├── sidepanel.html
 │   ├── sidepanel.js
-│   └── content.js
+│   ├── content.js           # 기존 시스템용
+│   └── content_langgraph.js # LangGraph 시스템용
 └── README.md             # 프로젝트 문서
 ```
 

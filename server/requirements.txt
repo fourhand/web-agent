@@ -1,9 +1,8 @@
-fastapi==0.104.1
-uvicorn[standard]==0.24.0
-python-dotenv==1.0.0
-openai>=1.50.0
-starlette==0.27.0
-requests==2.31.0
-beautifulsoup4==4.12.2
-Pillow==10.0.1
-websockets==15.0.1
+# Core packages available in conda defaults
+fastapi>=0.104.1
+uvicorn[standard]>=0.24.0
+websockets>=12.0
+python-dotenv>=1.0.0
+requests>=2.31.0
+beautifulsoup4>=4.12.2
+Pillow>=10.1.0

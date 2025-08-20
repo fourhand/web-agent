@@ -2,6 +2,7 @@ if (!window.mcpAgentInjected) {
   window.mcpAgentInjected = true;
 
   const EXTENSION_UI_ID = "mcp-ui";
+  const SHOULD_RENDER_UI = (window.top === window.self) && (window.innerWidth >= 320 && window.innerHeight >= 220);
   const MAX_STEPS = 10;
   
   // 와이어프레임 설정 관리
@@ -136,25 +137,16 @@ if (!window.mcpAgentInjected) {
         expectedPageChange: this.expectedPageChange,
         waitingForEvaluation: this.waitingForEvaluation
       };
+
+      await chrome.storage.local.set({"mcp-context": data});
+      console.log("💾 컨텍스트 저장 완료 (Cross-Origin Safe):", window.location.origin);
       
-      try {
-        // Chrome Extension Storage (Cross-Origin Safe)
-        await chrome.storage.local.set({"mcp-context": data});
-        console.log("💾 컨텍스트 저장 완료 (Cross-Origin Safe):", window.location.origin);
-        
-        // 하위 호환성을 위해 현재 도메인의 localStorage에도 저장
-        localStorage.setItem("mcp-context", JSON.stringify(data));
-        localStorage.setItem("mcp-goal", this.currentGoal);
-        localStorage.setItem("mcp-actionHistory", JSON.stringify(this.actionHistory));
-        localStorage.setItem("mcp-currentPlan", JSON.stringify(this.currentPlan));
-      } catch (e) {
-        console.error("❌ Chrome Storage 저장 실패, localStorage 사용:", e);
-        // Fallback to localStorage
-        localStorage.setItem("mcp-context", JSON.stringify(data));
-        localStorage.setItem("mcp-goal", this.currentGoal);
-        localStorage.setItem("mcp-actionHistory", JSON.stringify(this.actionHistory));
-        localStorage.setItem("mcp-currentPlan", JSON.stringify(this.currentPlan));
-      }
+      // 하위 호환성을 위해 현재 도메인의 localStorage에도 저장
+      localStorage.setItem("mcp-context", JSON.stringify(data));
+      localStorage.setItem("mcp-goal", this.currentGoal);
+      localStorage.setItem("mcp-actionHistory", JSON.stringify(this.actionHistory));
+      localStorage.setItem("mcp-currentPlan", JSON.stringify(this.currentPlan));
+
     }
     
     // 상태 관리 메서드들
@@ -433,7 +425,7 @@ if (!window.mcpAgentInjected) {
   // === UI 생성 ===
   const ui = document.createElement("div");
   ui.id = EXTENSION_UI_ID;
-  ui.style = "position:fixed;bottom:20px;right:20px;width:340px;padding:10px;background:rgba(255,255,255,0.95);border:1px solid #ccc;border-radius:10px;z-index:999999;font-family:sans-serif;";
+  ui.style = "position:fixed;bottom:20px;right:20px;width:340px;padding:10px;background:rgba(255,255,255,0.95);border:1px solid #ccc;border-radius:10px;z-index:2147483647;font-family:sans-serif;";
   ui.tabIndex = -1;
 
   const log = document.createElement("div");
@@ -1198,12 +1190,20 @@ if (!window.mcpAgentInjected) {
       }
     }
     
-    // 목표 진행도 표시
+    // 목표 진행도 표시 (서버 스키마 변화 대응: current_step/total_steps 폴백 처리)
     if (progress_evaluation) {
-      const { progress_percentage, current_phase, completion_feasibility, recommendations } = progress_evaluation;
+      const { progress_percentage, current_phase, completion_feasibility, recommendations, current_step, total_steps } = progress_evaluation;
+      const pct = typeof progress_percentage === 'number' ? progress_percentage : 0;
+      const phaseText = (current_phase != null && current_phase !== undefined)
+        ? current_phase
+        : `${(current_step != null ? current_step : '?')}/${(total_steps != null ? total_steps : '?')}`;
+      let feasibility = completion_feasibility;
+      if (!feasibility && typeof pct === 'number') {
+        feasibility = pct >= 90 ? 'high' : (pct >= 50 ? 'medium' : 'low');
+      }
       
       logMessage(`🎯 목표 진행도:`, "PROGRESS_EVALUATION");
-      logMessage(`  • 진행률: ${progress_percentage.toFixed(1)}% | 단계: ${current_phase} | 완료가능성: ${completion_feasibility}`, "PROGRESS_EVALUATION");
+      logMessage(`  • 진행률: ${Number(pct).toFixed(1)}% | 단계: ${phaseText} | 완료가능성: ${feasibility ?? 'unknown'}` , "PROGRESS_EVALUATION");
       
       if (recommendations && recommendations.length > 0) {
         logMessage(`  • 권장사항: ${recommendations.join(', ')}`, "PROGRESS_EVALUATION");
@@ -2227,8 +2227,36 @@ if (!window.mcpAgentInjected) {
     return null; // 전송 버튼을 찾지 못함
   }
 
-  document.body.appendChild(ui);
-  console.log("✅ MCP UI injected");
+  function attachUI() {
+    if (!SHOULD_RENDER_UI) {
+      return;
+    }
+    if (document.getElementById(EXTENSION_UI_ID)) {
+      return;
+    }
+    const body = document.body;
+    if (!body) {
+      // body가 아직 없으면 로드 후 재시도
+      document.addEventListener('DOMContentLoaded', () => attachUI(), { once: true });
+      window.addEventListener('load', () => attachUI(), { once: true });
+      return;
+    }
+    body.appendChild(ui);
+    console.log("✅ MCP UI injected");
+
+    // UI가 제거되면 재부착
+    try {
+      const reattachObserver = new MutationObserver(() => {
+        if (!document.getElementById(EXTENSION_UI_ID)) {
+          // 약간의 지연 후 재부착 (페이지 스크립트와 충돌 방지)
+          setTimeout(() => attachUI(), 100);
+        }
+      });
+      reattachObserver.observe(document.documentElement, { childList: true, subtree: true });
+    } catch (_) {}
+  }
+
+  attachUI();
   
   // UI 생성 후 현재 상태 표시
   setTimeout(() => {

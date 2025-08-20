@@ -479,7 +479,7 @@ def compress_dom(dom: list) -> list:
 # DOM 청킹 시스템
 # ============================
 
-def chunk_dom(dom_summary: list, chunk_size: int = 300) -> list:
+def chunk_dom(dom_summary: list, chunk_size: int = 1000) -> list:
     """DOM을 지정된 크기로 청크 분할"""
     chunks = []
     for i in range(0, len(dom_summary), chunk_size):
@@ -493,8 +493,8 @@ def chunk_dom(dom_summary: list, chunk_size: int = 300) -> list:
 async def analyze_dom_chunks(goal: str, dom_summary: list, image_data: str, current_step: int, plan: list) -> dict:
     """DOM 청크를 순차적으로 분석하여 최적 액션 찾기 (컨텍스트 유지)"""
     
-    # DOM을 300개씩 분할
-    chunks = chunk_dom(dom_summary, chunk_size=300)
+    # DOM을 1000개씩 분할 (요청 반영)
+    chunks = chunk_dom(dom_summary, chunk_size=1000)
     candidate_actions = []
     accumulated_context = {
         "page_structure": [],
@@ -504,6 +504,7 @@ async def analyze_dom_chunks(goal: str, dom_summary: list, image_data: str, curr
         "main_content_area": None,
         "action_candidates_count": 0
     }
+    best_confidence = 0.0
     
     for i, chunk in enumerate(chunks):
         logger.info(f"🔍 청크 {i+1}/{len(chunks)} 분석 중... ({len(chunk)}개 요소)")
@@ -529,15 +530,21 @@ async def analyze_dom_chunks(goal: str, dom_summary: list, image_data: str, curr
                 update_accumulated_context(accumulated_context, chunk, parsed_action, response)
                 
                 if parsed_action.get("action") not in ["none", "no_action"]:
+                    confidence = parsed_action.get("confidence", 0.5)
                     candidate_actions.append({
                         "chunk_index": i,
                         "action": parsed_action,
                         "elements_count": len(chunk),
-                        "confidence": parsed_action.get("confidence", 0.5),
+                        "confidence": confidence,
                         "context_aware": True
                     })
                     accumulated_context["action_candidates_count"] += 1
+                    best_confidence = max(best_confidence, confidence)
                     logger.info(f"✅ 청크 {i+1}에서 액션 발견: {parsed_action.get('action')} (신뢰도: {parsed_action.get('confidence', 'N/A')})")
+                    # 높은 신뢰도 후보 발견 시 조기 종료 → 호출 수 절감
+                    if best_confidence >= 0.92:
+                        logger.info("🛑 높은 신뢰도(>=0.92) 후보 발견으로 청크 분석 조기 종료")
+                        break
                 else:
                     logger.info(f"⏭️ 청크 {i+1}에서 적합한 액션 없음")
         
@@ -643,6 +650,7 @@ def build_chunk_execution_prompt_with_context(goal: str, chunk: list, chunk_num:
 2. 🔍 **이 청크 내에서만 액션 가능한 요소 탐색**
 3. 📊 **신뢰도 점수 부여 (0.0~1.0)**
 4. 🔗 **이전 청크에서 발견된 정보와의 연관성 고려**
+5. 🚦 "none" 규칙: 이 청크가 메인 콘텐츠(아이템 영역)에 속하고 신뢰도 ≥ 0.9의 명확한 대상이 있을 때만 액션을 제안하세요. 그렇지 않으면 반드시 {"action":"none"}을 반환하세요. 이전 청크에서 이미 후보가 있다면, 그보다 명백히 더 좋은 경우에만 제안하세요.
 
 **액션 우선순위 (컨텍스트 기반):**
 - 🎯 목표와 직접 관련되고 이전 맥락과 일치하는 요소 (최고 신뢰도)
@@ -650,7 +658,7 @@ def build_chunk_execution_prompt_with_context(goal: str, chunk: list, chunk_num:
 - 🧭 새로 발견된 내비게이션/기능 요소 (중간 신뢰도)
 
 **출력 형식:**
-적합한 액션이 있으면:
+적합한 액션이 있으면(위 규칙을 만족하는 경우에만 하나의 후보):
 {{"action":"click|fill|goto|google_search|hover|waitUntil", "selector":"<css>", 
   "text":"<optional>", "value":"<optional>", "url":"<optional>", "timeout":1000,
   "confidence": 0.8, "reason": "why this action is suitable with context"}}

@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>LangGraph Web Agent</title>
+    <style>
+        body {
+            width: 350px;
+            padding: 15px;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #f8f9fa;
+            margin: 0;
+        }
+        
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 15px;
+            text-align: center;
+        }
+        
+        .header h1 {
+            margin: 0;
+            font-size: 18px;
+            font-weight: 600;
+        }
+        
+        .status {
+            background: #e3f2fd;
+            border: 1px solid #2196f3;
+            border-radius: 6px;
+            padding: 10px;
+            margin-bottom: 15px;
+            font-size: 12px;
+        }
+        
+        .status.connected {
+            background: #e8f5e8;
+            border-color: #4caf50;
+        }
+        
+        .status.error {
+            background: #ffebee;
+            border-color: #f44336;
+        }
+        
+        .section {
+            background: white;
+            border-radius: 6px;
+            padding: 12px;
+            margin-bottom: 12px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+        
+        .section h3 {
+            margin: 0 0 10px 0;
+            font-size: 14px;
+            color: #333;
+            font-weight: 600;
+        }
+        
+        .input-group {
+            margin-bottom: 10px;
+        }
+        
+        .input-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-size: 12px;
+            color: #666;
+        }
+        
+        input[type="text"], textarea {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 12px;
+            box-sizing: border-box;
+        }
+        
+        textarea {
+            height: 60px;
+            resize: vertical;
+        }
+        
+        .button {
+            background: #667eea;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+            margin-right: 8px;
+            margin-bottom: 8px;
+        }
+        
+        .button:hover {
+            background: #5a6fd8;
+        }
+        
+        .button.secondary {
+            background: #6c757d;
+        }
+        
+        .button.secondary:hover {
+            background: #5a6268;
+        }
+        
+        .button.danger {
+            background: #dc3545;
+        }
+        
+        .button.danger:hover {
+            background: #c82333;
+        }
+        
+        .progress {
+            background: #e9ecef;
+            border-radius: 10px;
+            height: 8px;
+            margin: 10px 0;
+            overflow: hidden;
+        }
+        
+        .progress-bar {
+            background: linear-gradient(90deg, #667eea, #764ba2);
+            height: 100%;
+            transition: width 0.3s ease;
+        }
+        
+        .log {
+            background: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 4px;
+            padding: 8px;
+            height: 120px;
+            overflow-y: auto;
+            font-size: 11px;
+            font-family: 'Courier New', monospace;
+            margin-top: 10px;
+        }
+        
+        .log-entry {
+            margin-bottom: 2px;
+            padding: 2px 0;
+        }
+        
+        .log-entry.info { color: #0066cc; }
+        .log-entry.success { color: #28a745; }
+        .log-entry.warning { color: #ffc107; }
+        .log-entry.error { color: #dc3545; }
+        
+        .toggle-group {
+            display: flex;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+        
+        .toggle {
+            position: relative;
+            display: inline-block;
+            width: 40px;
+            height: 20px;
+            margin-right: 10px;
+        }
+        
+        .toggle input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+        
+        .slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: #ccc;
+            transition: .4s;
+            border-radius: 20px;
+        }
+        
+        .slider:before {
+            position: absolute;
+            content: "";
+            height: 16px;
+            width: 16px;
+            left: 2px;
+            bottom: 2px;
+            background-color: white;
+            transition: .4s;
+            border-radius: 50%;
+        }
+        
+        input:checked + .slider {
+            background-color: #667eea;
+        }
+        
+        input:checked + .slider:before {
+            transform: translateX(20px);
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🤖 LangGraph Web Agent</h1>
+    </div>
+    
+    <div class="status" id="connectionStatus">
+        🔌 서버 연결 중...
+    </div>
+    
+    <div class="section">
+        <h3>🎯 목표 설정</h3>
+        <div class="input-group">
+            <label for="goalInput">자동화 목표:</label>
+            <textarea id="goalInput" placeholder="예: 네이버에서 최신 메일을 보여줘"></textarea>
+        </div>
+        <button class="button" id="startButton">🚀 시작</button>
+        <button class="button secondary" id="stopButton">⏹️ 중지</button>
+    </div>
+    
+    <div class="section">
+        <h3>📊 진행 상황</h3>
+        <div id="progressInfo">대기 중...</div>
+        <div class="progress">
+            <div class="progress-bar" id="progressBar" style="width: 0%"></div>
+        </div>
+        <div id="currentStep">단계: -</div>
+    </div>
+    
+    <div class="section">
+        <h3>⚙️ 설정</h3>
+        <div class="toggle-group">
+            <label class="toggle">
+                <input type="checkbox" id="wireframeToggle" checked>
+                <span class="slider"></span>
+            </label>
+            <span>와이어프레임 이미지 사용</span>
+        </div>
+        <div class="toggle-group">
+            <label class="toggle">
+                <input type="checkbox" id="vectorstoreToggle" checked>
+                <span class="slider"></span>
+            </label>
+            <span>VectorStore DOM 관리</span>
+        </div>
+        <button class="button secondary" id="testButton">🧪 테스트</button>
+    </div>
+    
+    <div class="section">
+        <h3>📝 로그</h3>
+        <div class="log" id="logContainer">
+            <div class="log-entry info">LangGraph Web Agent 시작됨</div>
+        </div>
+        <button class="button secondary" id="clearLogButton">🗑️ 로그 지우기</button>
+    </div>
+    
+    <script src="sidepanel_langgraph.js"></script>
+</body>
+</html>

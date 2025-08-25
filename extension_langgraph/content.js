@@ -110,6 +110,12 @@ function initWebSocket() {
             type: 'langgraph_connection_status',
             connected: true
         });
+        
+        // 연결 복구 시 이전 상태 복원
+        if (context.currentGoal && context.status !== "idle") {
+            console.log("🔄 이전 워크플로우 상태 복원 시도");
+            restoreWorkflowState();
+        }
     };
     
     ws.onclose = () => {
@@ -147,6 +153,32 @@ async function waitUntilReady() {
     }
 }
 
+// 워크플로우 상태 복원
+async function restoreWorkflowState() {
+    try {
+        await waitUntilReady();
+        
+        // 현재 DOM 스냅샷 전송하여 상태 복원
+        const domSnapshot = await summarizeDom();
+        
+        ws.send(JSON.stringify({
+            type: "restore_workflow",
+            goal: context.currentGoal,
+            current_step: context.currentStep,
+            total_steps: context.totalSteps,
+            plan: context.plan,
+            action_history: context.actionHistory,
+            dom: domSnapshot,
+            status: context.status
+        }));
+        
+        logMessage("🔄 워크플로우 상태 복원 요청됨");
+    } catch (error) {
+        console.error("❌ 상태 복원 실패:", error);
+        logMessage("❌ 워크플로우 상태 복원 실패");
+    }
+}
+
 // ============================
 // Message Handling
 // ============================
@@ -166,6 +198,9 @@ async function handleLangGraphMessage(event) {
         case "action_executed":
             logMessage(`✅ 액션 실행됨: ${data.action.description || data.action.action}`);
             break;
+        case "execute_action":
+            await handleExecuteAction(data.action);
+            break;            break;
             
         case "error":
             logMessage(`❌ 오류: ${data.detail}`);

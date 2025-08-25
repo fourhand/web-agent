@@ -318,9 +318,6 @@ def create_workflow() -> StateGraph:
     
     # 조건부 라우팅
     def route_after_analysis(state: AgentState) -> str:
-        # DOM 요소가 없으면 대기
-        if not state.get("dom_elements") or len(state["dom_elements"]) == 0:
-            return END
         if state["status"] == "error":
             return END
         elif state["dom_elements"]:
@@ -375,14 +372,6 @@ app.add_middleware(
 # 워크플로우 생성
 workflow = create_workflow()
 memory = MemorySaver()
-
-# 체크포인트를 파일 시스템에 저장하여 영속성 보장
-import os
-from pathlib import Path
-
-checkpoint_dir = Path("checkpoints")
-checkpoint_dir.mkdir(exist_ok=True)
-
 app_graph = workflow.compile()
 
 @app.websocket("/ws")
@@ -448,55 +437,12 @@ async def websocket_endpoint(websocket: WebSocket):
                 dom_elements = payload.get("dom", [])
                 logger.info(f"📊 DOM 업데이트: {len(dom_elements)}개 요소")
                 
-                # DOM 요소가 있으면 워크플로우 계속 실행
+                # 현재 상태에 DOM 추가
                 # 실제로는 체크포인트에서 상태를 복원해야 함
                 await websocket.send_text(json.dumps({
                     "type": "dom_updated",
                     "message": f"DOM {len(dom_elements)}개 요소 업데이트됨"
                 }))
-            
-            elif payload.get("type") == "restore_workflow":
-                # 워크플로우 상태 복원
-                logger.info("🔄 워크플로우 상태 복원 요청")
-                
-                try:
-                    # 복원된 상태로 AgentState 생성
-                    restored_state = AgentState(
-                        goal=payload.get("goal", ""),
-                        current_step=payload.get("current_step", 0),
-                        total_steps=payload.get("total_steps", 0),
-                        plan=payload.get("plan", []),
-                        dom_elements=payload.get("dom", []),
-                        dom_vectorstore=None,
-                        last_action=payload.get("action_history", [])[-1] if payload.get("action_history") else None,
-                        action_history=payload.get("action_history", []),
-                        messages=[],
-                        current_page_url="",
-                        status=payload.get("status", "executing"),
-                        error_message=None
-                    )
-                    
-                    # 워크플로우 계속 실행
-                    result = await app_graph.ainvoke(restored_state, config={"configurable": {"thread_id": "default"}})
-                    
-                    await websocket.send_text(json.dumps({
-                        "type": "workflow_result",
-                        "status": result["status"],
-                        "plan": result["plan"],
-                        "action_history": result["action_history"],
-                        "current_step": result["current_step"],
-                        "total_steps": result["total_steps"],
-                        "error_message": result.get("error_message")
-                    }, ensure_ascii=False))
-                    
-                    logger.info("✅ 워크플로우 상태 복원 완료")
-                    
-                except Exception as e:
-                    logger.error(f"❌ 상태 복원 실패: {e}")
-                    await websocket.send_text(json.dumps({
-                        "type": "error",
-                        "detail": f"상태 복원 실패: {str(e)}"
-                    }))
             
             elif payload.get("type") == "execute_action":
                 # 특정 액션 실행

@@ -164,7 +164,9 @@ async function handleLangGraphMessage(event) {
             break;
             
         case "action_executed":
-            logMessage(`✅ 액션 실행됨: ${data.action.description || data.action.action}`);
+        case "execute_action":
+            await handleExecuteAction(data.action);
+            break;            logMessage(`✅ 액션 실행됨: ${data.action.description || data.action.action}`);
             break;
             
         case "error":

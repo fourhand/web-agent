@@ -190,10 +190,15 @@ AI 기반의 지능형 브라우저 자동화 시스템으로, 시각적 인식�
 ## 🏗️ **시스템 구조**
 
 ### **클라이언트 (Extension)**
-- **content.js**: DOM 캡처, UI 주입, WebSocket 통신 (기존)
-- **content_langgraph.js**: LangGraph 기반 워크플로우 통신 (새로운)
-- **sidepanel.js**: 사용자 인터페이스, 설정 관리
-- **manifest.json**: 확장 프로그램 설정
+- **extension/**: 기존 시스템용 확장 프로그램
+  - **content.js**: DOM 캡처, UI 주입, WebSocket 통신
+  - **sidepanel.js**: 사용자 인터페이스, 설정 관리
+  - **manifest.json**: 확장 프로그램 설정
+- **extension_langgraph/**: LangGraph 시스템용 확장 프로그램
+  - **content.js**: LangGraph 기반 워크플로우 통신
+  - **sidepanel.js**: LangGraph 전용 사용자 인터페이스
+  - **background.js**: LangGraph 백그라운드 서비스
+  - **manifest.json**: LangGraph 전용 확장 프로그램 설정
 
 ### **서버 (FastAPI)**
 - **app.py**: 메인 서버 로직, WebSocket 엔드포인트 (기존)
@@ -309,9 +314,16 @@ pip install -r requirements_langgraph.txt
 
 # 서버 실행
 uvicorn app_langgraph:app --reload --port 8001
+```
 
-# LangGraph 확장 프로그램 사용
-# content_langgraph.js를 content.js로 교체하여 사용
+#### **LangGraph 확장 프로그램 설치**
+```bash
+# 방법 1: 기존 확장 프로그램 수정
+# extension/content.js를 extension/content_langgraph.js로 교체
+
+# 방법 2: 별도 확장 프로그램으로 설치 (권장)
+# extension_langgraph 폴더를 Chrome 확장 프로그램으로 로드
+# Chrome 확장 프로그램 관리 → 개발자 모드 → 압축해제된 확장 프로그램 로드
 ```
 
 ### **환경 변수**
@@ -592,12 +604,17 @@ web-agent/
 │   ├── debug_images/          # 와이어프레임 이미지 저장
 │   ├── prompts/              # LLM 프롬프트
 │   └── schema/               # 스키마 정의
-├── extension/             # Chrome Extension
+├── extension/             # 기존 시스템용 Chrome Extension
 │   ├── manifest.json
 │   ├── sidepanel.html
 │   ├── sidepanel.js
-│   ├── content.js           # 기존 시스템용
-│   └── content_langgraph.js # LangGraph 시스템용
+│   └── content.js
+├── extension_langgraph/   # LangGraph 시스템용 Chrome Extension
+│   ├── manifest.json
+│   ├── sidepanel.html
+│   ├── sidepanel.js
+│   ├── background.js
+│   └── content.js
 └── README.md             # 프로젝트 문서
 ```
 

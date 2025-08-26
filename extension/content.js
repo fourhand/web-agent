@@ -425,7 +425,7 @@ if (!window.mcpAgentInjected) {
   // === UI 생성 ===
   const ui = document.createElement("div");
   ui.id = EXTENSION_UI_ID;
-  ui.style = "position:fixed;bottom:20px;right:20px;width:340px;padding:10px;background:rgba(255,255,255,0.95);border:1px solid #ccc;border-radius:10px;z-index:2147483647;font-family:sans-serif;";
+  ui.style = "position:fixed;bottom:20px;right:20px;width:340px;padding:10px;background:rgba(255,255,255,0.95);border:1px solid #ccc;border-radius:10px;z-index:2147483647;font-family:sans-serif;box-shadow:0 4px 12px rgba(0,0,0,0.15);";
   ui.tabIndex = -1;
 
   const log = document.createElement("div");
@@ -2234,26 +2234,80 @@ if (!window.mcpAgentInjected) {
     if (document.getElementById(EXTENSION_UI_ID)) {
       return;
     }
-    const body = document.body;
-    if (!body) {
-      // body가 아직 없으면 로드 후 재시도
-      document.addEventListener('DOMContentLoaded', () => attachUI(), { once: true });
-      window.addEventListener('load', () => attachUI(), { once: true });
-      return;
-    }
-    body.appendChild(ui);
-    console.log("✅ MCP UI injected");
-
-    // UI가 제거되면 재부착
-    try {
-      const reattachObserver = new MutationObserver(() => {
-        if (!document.getElementById(EXTENSION_UI_ID)) {
-          // 약간의 지연 후 재부착 (페이지 스크립트와 충돌 방지)
-          setTimeout(() => attachUI(), 100);
+    
+    // 모든 프레임에서 시도 (iframe 포함)
+    const frames = [document, ...Array.from(document.querySelectorAll('iframe')).map(f => f.contentDocument).filter(Boolean)];
+    
+    for (const frame of frames) {
+      try {
+        const body = frame.body;
+        if (!body) {
+          continue;
         }
-      });
-      reattachObserver.observe(document.documentElement, { childList: true, subtree: true });
-    } catch (_) {}
+        
+        // 이미 존재하는지 확인
+        if (frame.getElementById(EXTENSION_UI_ID)) {
+          continue;
+        }
+        
+        // UI 복제하여 각 프레임에 주입
+        const frameUI = ui.cloneNode(true);
+        frameUI.id = EXTENSION_UI_ID;
+        
+        // 이벤트 리스너 재바인딩
+        const input = frameUI.querySelector('input');
+        const sendButton = frameUI.querySelector('button');
+        const clearButton = frameUI.querySelectorAll('button')[1];
+        
+        if (input && sendButton && clearButton) {
+          // 전송 버튼 이벤트
+          sendButton.addEventListener("click", async (e) => {
+            e.stopPropagation();
+            const message = input.value.trim();
+            if (!message) return;
+            input.value = '';
+            
+            await context.setGoal(message);
+            actionHistory = context.actionHistory;
+            currentPlan = context.currentPlan;
+            
+            logMessage(`👉 ${message}`);
+            await waitUntilReady();
+            ws.send(JSON.stringify({ type: "init", message }));
+          });
+          
+          // Clear 버튼 이벤트
+          clearButton.addEventListener("click", async (e) => {
+            e.stopPropagation();
+            await context.clear();
+            actionHistory = context.actionHistory;
+            currentPlan = context.currentPlan;
+            lastDomSnapshot = context.lastDomSnapshot;
+            
+            const log = frameUI.querySelector('div');
+            if (log) log.innerHTML = "";
+            if (input) input.value = "";
+            logMessage("🧹 모든 컨텍스트가 초기화되었습니다.");
+          });
+        }
+        
+        frame.body.appendChild(frameUI);
+        console.log("✅ MCP UI injected in frame:", frame.location?.href || 'main');
+        
+        // UI가 제거되면 재부착 (각 프레임별로)
+        try {
+          const reattachObserver = new MutationObserver(() => {
+            if (!frame.getElementById(EXTENSION_UI_ID)) {
+              setTimeout(() => attachUI(), 100);
+            }
+          });
+          reattachObserver.observe(frame.documentElement, { childList: true, subtree: true });
+        } catch (_) {}
+        
+      } catch (e) {
+        console.log("⚠️ 프레임 UI 주입 실패:", e);
+      }
+    }
   }
 
   attachUI();

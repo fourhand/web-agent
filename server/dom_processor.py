@@ -109,6 +109,8 @@ class DOMProcessor:
             return dom
         
         embedded = []
+        embedding_dimension = None
+        
         for el in dom:
             if not el.get("selector"):
                 continue
@@ -118,6 +120,10 @@ class DOMProcessor:
                 try:
                     # 텍스처를 벡터로 변환
                     texture_embedding = self.embedding_model.encode([el["texture"]])[0]
+                    
+                    # 임베딩 차원 기록 (첫 번째 요소에서만)
+                    if embedding_dimension is None:
+                        embedding_dimension = len(texture_embedding)
                     
                     # 원본 요소에 임베딩 추가
                     el_with_embedding = el.copy()
@@ -129,7 +135,7 @@ class DOMProcessor:
             else:
                 embedded.append(el)
         
-        logger.info(f"🔢 DOM 임베딩: {len(dom)}개 → {len(embedded)}개")
+        logger.info(f"🔢 DOM 임베딩: {len(dom)}개 → {len(embedded)}개 (차원: {embedding_dimension})")
         return embedded
 
     def rerank_dom(self, dom: List[Dict], query: str = "") -> List[Dict]:

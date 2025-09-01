@@ -34,12 +34,14 @@ async def handle_extension_message(ws: WebSocket, payload: Dict[str, Any]) -> No
         await send_chat(ws, "페이지 로딩 완료")
         await ws.send_text(json.dumps({"type": "request_dom"}))
 
-    elif msg_type == "DOM_DATA":
-        dom = payload.get("dom", "")
-        if "password" in dom.lower():
+    elif msg_type in ("DOM_DATA", "dom_with_image"):
+        dom = payload.get("dom", [])
+        dom_len = len(dom) if isinstance(dom, list) else len(dom)
+        img_len = len(payload.get("image", ""))
+        if isinstance(dom, str) and "password" in dom.lower():
             await send_chat(ws, "로그인이 필요합니다. 로그인 후 '진행'을 눌러주세요.")
         else:
-            await send_chat(ws, f"DOM 수신 ({len(dom)} bytes)")
+            await send_chat(ws, f"DOM 수신 ({dom_len} items, image {img_len} bytes)")
 
     elif msg_type == "ACTION_RESULT":
         result = payload.get("result", {})

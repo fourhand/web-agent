@@ -5,7 +5,8 @@ DOM 처리와 상태 기반 계획 실행을 통해 복잡한 웹 작업을 자�
 ## 주요 구성 요소
 
 ### 1. Chrome Extension (안정)
-- 사이드 패널 UI 제공
+- 사이드 패널 채팅 UI 제공
+- DOM 캡쳐(요소 요약 + 스크린샷)와 이벤트 전달
 - DOM 캡쳐와 이벤트 전달
 - 페이지 로딩 완료 이벤트 전송
 
@@ -53,7 +54,7 @@ DOM 처리와 상태 기반 계획 실행을 통해 복잡한 웹 작업을 자�
 
 - `LOAD_COMPLETE`: Extension → ActionMCP, 페이지 로딩 완료 알림
 - `CAPTURE_DOM`: ActionMCP → Extension, DOM 스냅샷 요청
-- `DOM_DATA`: Extension → ActionMCP, 캡처된 DOM 전달
+- `dom_with_image`: Extension → ActionMCP, 캡처된 DOM 요소 리스트와 페이지 스크린샷 전달
 - `EXECUTE_ACTION`: ActionMCP → Extension, 클릭/입력 등 브라우저 제어 명령
   - Payload:
     ```json
@@ -72,6 +73,7 @@ DOM 처리와 상태 기반 계획 실행을 통해 복잡한 웹 작업을 자�
     ```
 - `google_search` 액션은 내부적으로 `goto`로 변환됩니다.
 - `ACTION_RESULT`: Extension → ActionMCP, 명령 수행 결과 전달
+- `chat`: 양방향, 채팅 메시지 교환
 - `PING`/`PONG`: 양방향, 연결 상태 확인
 
 ## 디렉토리 구조

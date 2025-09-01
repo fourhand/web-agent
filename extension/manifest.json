@@ -3,7 +3,7 @@
   "name": "ActionMCP Bridge",
   "version": "0.1",
   "description": "Forwards DOM and action messages between ActionMCP and the active page.",
-  "permissions": ["scripting", "activeTab"],
+  "permissions": ["scripting", "activeTab", "tabs"],
   "host_permissions": ["<all_urls>"],
   "content_scripts": [
     {

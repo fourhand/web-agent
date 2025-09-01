@@ -12,10 +12,56 @@
         chrome.runtime.sendMessage({ type: 'ACTION_RESULT', result });
       });
     } else if (msg.type === 'CAPTURE_DOM') {
-      const dom = document.documentElement.outerHTML;
+      const dom = captureDom();
       chrome.runtime.sendMessage({ type: 'DOM_DATA', dom });
     }
   });
+
+  function getSelector(el) {
+    if (el.id) return `#${CSS.escape(el.id)}`;
+    const parts = [];
+    while (el && parts.length < 4) {
+      let part = el.nodeName.toLowerCase();
+      if (el.classList.length) {
+        part += '.' + Array.from(el.classList).map(c => CSS.escape(c)).join('.');
+      }
+      const parent = el.parentElement;
+      if (parent) {
+        const siblings = Array.from(parent.children).filter((c) => c.nodeName === el.nodeName);
+        if (siblings.length > 1) {
+          const index = siblings.indexOf(el) + 1;
+          part += `:nth-of-type(${index})`;
+        }
+      }
+      parts.unshift(part);
+      el = parent;
+    }
+    return parts.join(' > ');
+  }
+
+  function captureDom() {
+    const elements = [];
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT);
+    let node;
+    while ((node = walker.nextNode())) {
+      const rect = node.getBoundingClientRect();
+      if (!rect.width && !rect.height) continue;
+      const entry = {
+        tag: node.tagName.toLowerCase(),
+        selector: getSelector(node)
+      };
+      if (node.id) entry.id = node.id;
+      if (node.name) entry.name = node.name;
+      if (node.type) entry.type = node.type;
+      if (node.className) entry.class = node.className;
+      if (node.href) entry.href = node.href;
+      if ('value' in node && node.value) entry.value = node.value;
+      const text = node.innerText || '';
+      if (text.trim()) entry.text = text.trim().slice(0, 100);
+      elements.push(entry);
+    }
+    return elements;
+  }
 
   async function executeAction(action) {
     try {

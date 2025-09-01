@@ -35,7 +35,12 @@ function forwardToTab(message) {
 }
 
 chrome.runtime.onMessage.addListener((msg) => {
-  if (ws && ws.readyState === WebSocket.OPEN) {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  if (msg.type === 'DOM_DATA') {
+    chrome.tabs.captureVisibleTab({ format: 'png' }, (image) => {
+      ws.send(JSON.stringify({ type: 'dom_with_image', dom: msg.dom, image }));
+    });
+  } else {
     ws.send(JSON.stringify(msg));
   }
 });

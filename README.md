@@ -1,10 +1,10 @@
-# MCP LLM Browser Automation System
+# 🤖 MCP LLM Browser Automation System
 
-AI 기반의 지능형 브라우저 자동화 시스템으로, DOM 처리와 상태 관리를 통해 복잡한 웹 작업을 자동으로 수행합니다.
+AI 기반의 지능형 브라우저 자동화 시스템으로, Model Context Protocol (MCP)을 기반으로 DOM 처리와 상태 관리를 통해 복잡한 웹 작업을 자동으로 수행합니다.
 
 ## 🎯 프로젝트 개요
 
-이 시스템은 LLM(Large Language Model)과 Chrome Extension을 결합하여 자연어 명령으로 웹 브라우저를 자동화하는 혁신적인 도구입니다. DOM Processor를 통해 페이지 구조를 분석하고, Graph Line 실행을 통해 지능적인 웹 자동화를 제공합니다.
+이 시스템은 Model Context Protocol (MCP)을 기반으로 LLM(Large Language Model)과 Chrome Extension을 결합하여 자연어 명령으로 웹 브라우저를 자동화하는 혁신적인 도구입니다. 표준화된 도구 인터페이스를 통해 DOM Processor를 통한 페이지 구조 분석과 Graph Line 실행을 통한 지능적인 웹 자동화를 제공합니다.
 
 ## 🚀 주요 기능
 
@@ -13,6 +13,12 @@ AI 기반의 지능형 브라우저 자동화 시스템으로, DOM 처리와 상
 - **임베딩 기반 분석**: `intfloat/multilingual-e5-base` 모델로 768차원 벡터 생성
 - **FAISS 유사도 검색**: 벡터 기반 요소 리랭킹 및 검색
 - **목적별 프롬프트 생성**: 액션 생성과 페이지 평가를 위한 최적화된 프롬프트
+
+### 🔧 MCP 기반 모듈화
+- **표준화된 도구 인터페이스**: DOM 분석, 계획 수립, 액션 실행, 결과 평가
+- **확장 가능한 아키텍처**: 새로운 도구 쉽게 추가 가능
+- **타입 안전성**: Pydantic 모델 기반 데이터 검증
+- **REST API & WebSocket**: 다양한 클라이언트 지원
 
 ### 🔄 Graph Line 실행 시스템
 - **채팅 분석** → **계획 수립** → **액션 MPC** → **결과 평가** → **계획 조정/진행/종료**
@@ -50,15 +56,15 @@ DOM 처리 (DOM Processor)
 
 ### 🔧 핵심 컴포넌트
 
-#### 1. **채팅 분석 (Chat Analysis)**
-- **목적**: 사용자 입력의 의도와 목표 파악
+#### 1. **MCP 서버 (MCP Server)**
+- **목적**: 표준화된 도구 인터페이스 제공
 - **기능**:
-  - 질문 vs 액션 분류
-  - 목표 추출 및 정제
-  - DOM 필요성 판단
-- **출력**: `ChatAnalysisResult`
+  - 도구 등록 및 관리
+  - 요청/응답 처리
+  - 알림 시스템
+- **출력**: `MCPResponse`
 
-#### 2. **DOM 처리 (DOM Processor)**
+#### 2. **DOM 분석 도구 (DOM Analysis Tool)**
 - **목적**: 페이지 구조 분석 및 LLM용 데이터 준비
 - **기능**:
   - DOM 텍스처 추출 및 임베딩
@@ -66,7 +72,7 @@ DOM 처리 (DOM Processor)
   - 유사도 기반 요소 리랭킹
 - **출력**: 액션 생성 프롬프트, 페이지 평가 프롬프트
 
-#### 3. **계획 수립 (Planning)**
+#### 3. **계획 수립 도구 (Planning Tool)**
 - **목적**: 목표 달성을 위한 단계별 계획 생성
 - **기능**:
   - 목표 기반 계획 수립
@@ -74,7 +80,7 @@ DOM 처리 (DOM Processor)
   - 우선순위 설정
 - **출력**: `PlanStep[]`
 
-#### 4. **액션 MPC (Action MPC)**
+#### 4. **액션 실행 도구 (Action Execution Tool)**
 - **목적**: 계획된 액션의 실행 및 모니터링
 - **기능**:
   - 액션 타입별 실행
@@ -82,7 +88,7 @@ DOM 처리 (DOM Processor)
   - 에러 처리 및 재시도
 - **출력**: 액션 실행 결과
 
-#### 5. **결과 평가 (Evaluation)**
+#### 5. **결과 평가 도구 (Evaluation Tool)**
 - **목적**: 액션 실행 결과 분석 및 다음 단계 결정
 - **기능**:
   - 목표 달성도 평가
@@ -243,9 +249,13 @@ idle → analyzing → planning → executing → evaluating → (completed | re
 ```
 web-agent/
 ├── server/
+│   ├── mcp_server.py             # MCP 서버 핵심 클래스
+│   ├── app_mcp.py                # MCP FastAPI 서버
 │   ├── dom_processor.py          # DOM 처리 핵심 클래스
-│   ├── app.py                    # 메인 서버 (Graph Line 실행)
+│   ├── graph_line_executor.py    # Graph Line 실행 엔진
+│   ├── app_mpc.py                # 액션 MPC 서버 (레거시)
 │   ├── requirements.txt          # Python 의존성
+│   ├── test_mcp_server.py        # MCP 서버 테스트
 │   └── test_dom_processor.py     # DOM Processor 테스트
 ├── extension/
 │   ├── content.js                # DOM 캡처 및 WebSocket 통신
@@ -262,26 +272,46 @@ web-agent/
 const ws = new WebSocket('ws://localhost:8000/ws');
 ```
 
-#### 메시지 타입
+#### MCP 메시지 타입
 ```typescript
-interface ChatMessage {
-    type: 'chat';
-    content: string;
-    session_id: string;
+interface MCPRequest {
+    id: string;
+    method: string;
+    params: Record<string, any>;
+    tool_type: string;
 }
 
-interface DOMData {
-    type: 'dom';
-    elements: DOMElement[];
-    session_id: string;
+interface MCPResponse {
+    id: string;
+    result: Record<string, any>;
+    error?: string;
+    timestamp: number;
 }
 
-interface ActionResult {
-    type: 'action_result';
-    action: string;
-    success: boolean;
-    confidence: number;
-    next_step: string;
+interface MCPNotification {
+    method: string;
+    params: Record<string, any>;
+    tool_type: string;
+    timestamp: number;
+}
+
+// 도구별 메시지
+interface DOMAnalysisRequest {
+    operation: 'prepare' | 'get_context' | 'get_action_prompt' | 'get_evaluation_prompt';
+    dom_data?: DOMElement[];
+    goal?: string;
+    plan_step?: PlanStep;
+}
+
+interface PlanningRequest {
+    user_input: string;
+    dom_data?: DOMElement[];
+}
+
+interface ActionExecutionRequest {
+    operation: 'set_plan' | 'execute_step' | 'get_status';
+    plan_steps?: PlanStep[];
+    goal?: string;
 }
 ```
 
